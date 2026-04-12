@@ -1,0 +1,109 @@
+# Copy to config.yaml and fill in API keys. Do not commit config.yaml.
+interface:
+  markdown_in_terminal: false
+
+yamljarvis:
+  name: "Jarvis"
+  wake_word: "hey jarvis"
+  voice_enabled: false
+  web_ui_enabled: false
+
+yamlweb:
+  enabled: false
+  host: "0.0.0.0"
+  port: 5000
+  debug: false
+  open_browser: true
+
+models:
+  primary: "groq"
+  fallback: ["gemini", "openrouter", "ollama"]
+  providers:
+    groq:
+      api_key: ""
+      model: "llama-3.3-70b-versatile"
+      base_url: "https://api.groq.com/openai/v1"
+    gemini:
+      api_key: ""
+      model: "gemini-2.0-flash"
+    openrouter:
+      api_key: ""
+      model: "meta-llama/llama-3.3-70b-instruct:free"
+      base_url: "https://openrouter.ai/api/v1"
+    ollama:
+      model: "llama3.2"
+      base_url: "http://localhost:11434/v1"
+
+memory:
+  max_history: 20
+  persist: true
+  file: "jarvis_memory.json"
+
+yamlvoice:
+  enabled: false
+  auto_speak: true
+  wake_word: "hey jarvis"
+  wake_word_enabled: false
+  stt:
+    model: "base"
+    device: "cpu"
+    language: "en"
+  tts:
+    engine: "edge-tts"
+    voice: "en-GB-RyanNeural"
+    rate: "+10%"
+    volume: "+0%"
+  porcupine_key: ""
+
+skills:
+  web_search: true
+  file_control: true
+  shell_control: true
+  clipboard: true
+  app_launcher: true
+  code_assistant: true
+  smarthome: true
+
+yamlsmarthome:
+  enabled: false
+  provider: "homeassistant"
+  homeassistant:
+    url: "http://homeassistant.local:8123"
+    token: ""
+    scan_interval: 10
+  mqtt:
+    enabled: false
+    host: "localhost"
+    port: 1883
+    username: ""
+    password: ""
+    client_id: "jarvis"
+  rooms:
+    aliases:
+      lounge: "living_room"
+      sitting_room: "living_room"
+  routines:
+    - name: "good_morning"
+      actions:
+        - {command: "turn on all lights", delay: 0}
+        - {command: "set thermostat to 22", delay: 1}
+    - name: "good_night"
+      actions:
+        - {command: "turn off all lights", delay: 0}
+        - {command: "set thermostat to 18", delay: 1}
+    - name: "movie_mode"
+      actions:
+        - {command: "set living room lights to 20%", delay: 0}
+    - name: "away_mode"
+      actions:
+        - {command: "turn off all lights", delay: 0}
+        - {command: "set thermostat to 16", delay: 2}
+
+apps:
+  aliases:
+    chrome: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+    notepad: "notepad.exe"
+    vscode: "code"
+    explorer: "explorer.exe"
+    calculator: "calc.exe"
+    spotify: "spotify.exe"
