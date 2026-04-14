@@ -6,10 +6,21 @@ TODO: add auth (local network only for now).
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING, Any
 
-from duckduckgo_search import DDGS
+try:
+    from ddgs import DDGS
+except ImportError:
+    from duckduckgo_search import DDGS  # legacy fallback
 from flask import Blueprint, jsonify, request
+
+from core.db import db
+
+try:
+    from bson import ObjectId
+except ImportError:
+    ObjectId = None  # type: ignore[misc, assignment]
 
 if TYPE_CHECKING:
     from interface.web.app import WebInterface
@@ -17,6 +28,16 @@ if TYPE_CHECKING:
 
 def _error(message: str, code: int = 400):
     return jsonify({"error": message, "code": code}), code
+
+
+def _scrub_mongo_doc(doc: dict[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for k, v in doc.items():
+        if k == "_id":
+            out["id"] = str(v)
+        else:
+            out[k] = v
+    return out
 
 
 def create_api_blueprint(web: "WebInterface") -> Blueprint:
@@ -155,8 +176,15 @@ def create_api_blueprint(web: "WebInterface") -> Blueprint:
                 return _error("query is required", 400)
             max_results = int(body.get("max_results", 8))
             max_results = max(1, min(max_results, 15))
-            with DDGS() as ddgs:
-                raw = list(ddgs.text(query, max_results=max_results))
+            raw = []
+            try:
+                try:
+                    with DDGS() as ddg_client:
+                        raw = list(ddg_client.text(query, max_results=max_results))
+                finally:
+                    pass
+            except Exception as e:
+                return _error(str(e), 500)
             items = []
             for item in raw:
                 items.append(
@@ -339,6 +367,128 @@ def create_api_blueprint(web: "WebInterface") -> Blueprint:
             if rm is None:
                 return jsonify({"configured": False, "routines": []})
             return jsonify({"configured": True, "routines": rm.describe_routines()})
+        except Exception as e:
+            return _error(str(e), 500)
+
+    def _agent_roster():
+        orch = getattr(web.registry, "orchestrator", None)
+        rows: list[dict[str, Any]] = []
+        if orch is None:
+            return rows
+        rows.append(
+            {
+                "name": orch.name,
+                "status": getattr(orch, "status", "idle"),
+                "current_task": getattr(orch, "current_task", ""),
+                "tasks_completed": getattr(orch, "tasks_completed", 0),
+            }
+        )
+        for name, agent in getattr(orch, "_agents", {}).items():
+            rows.append(
+                {
+                    "name": name,
+                    "status": getattr(agent, "status", "idle"),
+                    "current_task": getattr(agent, "current_task", ""),
+                    "tasks_completed": getattr(agent, "tasks_completed", 0),
+                }
+            )
+        return rows
+
+    @bp.route("/agents", methods=["GET"])
+    def api_agents_list():
+        try:
+            return jsonify({"agents": _agent_roster()})
+        except Exception as e:
+            return _error(str(e), 500)
+
+    @bp.route("/agents/<name>", methods=["GET"])
+    def api_agent_detail(name: str):
+        try:
+            key = (name or "").strip().lower()
+            for a in _agent_roster():
+                if str(a.get("name") or "").lower() == key:
+                    return jsonify({"agent": a})
+            return _error("Agent not found", 404)
+        except Exception as e:
+            return _error(str(e), 500)
+
+    @bp.route("/memories", methods=["GET"])
+    def api_memories_list():
+        try:
+            if not db.available:
+                return jsonify({"memories": [], "message": "MongoDB not available"})
+            category = (request.args.get("category") or "").strip()
+            limit = max(1, min(int(request.args.get("limit") or 30), 200))
+            search = (request.args.get("search") or "").strip()
+            if search:
+                rows = db.text_search("memories", search, limit=limit)
+            else:
+                q: dict[str, Any] = {"user_id": "default"}
+                if category:
+                    q["category"] = category
+                rows = db.find("memories", q, limit=limit, sort=[("timestamp", -1)])
+            return jsonify({"memories": [_scrub_mongo_doc(dict(r)) for r in rows]})
+        except Exception as e:
+            return _error(str(e), 500)
+
+    @bp.route("/memories/<mid>", methods=["DELETE"])
+    def api_memories_delete(mid: str):
+        try:
+            if not db.available:
+                return _error("MongoDB not available", 503)
+            q: dict[str, Any] = {}
+            if ObjectId is not None and ObjectId.is_valid(mid):
+                q["_id"] = ObjectId(mid)
+            else:
+                q["text_hash"] = mid
+            n = db.delete("memories", q)
+            if n <= 0:
+                return _error("Memory not found", 404)
+            return jsonify({"ok": True, "deleted": n})
+        except Exception as e:
+            return _error(str(e), 500)
+
+    @bp.route("/sessions", methods=["GET"])
+    def api_sessions_list():
+        try:
+            return jsonify({"sessions": web.memory.get_sessions()})
+        except Exception as e:
+            return _error(str(e), 500)
+
+    @bp.route("/sessions/<sid>/load", methods=["POST"])
+    def api_sessions_load(sid: str):
+        try:
+            ok = web.memory.load_from_db(sid)
+            if not ok:
+                return _error("Session not found or DB unavailable", 404)
+            return jsonify({"ok": True, "session_id": web.memory.session_id})
+        except Exception as e:
+            return _error(str(e), 500)
+
+    @bp.route("/stats", methods=["GET"])
+    def api_stats():
+        try:
+            orch = getattr(web.registry, "orchestrator", None)
+            n_agents = (len(getattr(orch, "_agents", {}) or {}) + 1) if orch else 0
+            tc = tm = 0
+            if db.available:
+                col = db.get_collection("conversations")
+                if col is not None:
+                    try:
+                        tc = len(col.distinct("session_id"))
+                    except Exception:
+                        tc = db.count("conversations", {})
+                tm = db.count("memories", {})
+            uptime_s = int(time.perf_counter() - web._started_at)
+            return jsonify(
+                {
+                    "total_conversations": tc,
+                    "total_memories": tm,
+                    "agents_available": n_agents,
+                    "db_status": "connected" if db.available else "unavailable",
+                    "uptime": uptime_s,
+                }
+            )
         except Exception as e:
             return _error(str(e), 500)
 

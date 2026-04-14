@@ -6,7 +6,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from duckduckgo_search import DDGS
+try:
+    from ddgs import DDGS
+except ImportError:
+    from duckduckgo_search import DDGS  # legacy fallback
 
 from utils.logger import get_logger
 
@@ -25,10 +28,14 @@ def web_search(query: str, max_results: int = 5) -> str:
 
     n = max(1, min(int(max_results), 15))
     lines: list[str] = [f"Web search results for: {q}", ""]
+    results: list[Any] = []
 
     try:
-        with DDGS() as ddgs:
-            results = list(ddgs.text(q, max_results=n))
+        try:
+            with DDGS() as ddg_client:
+                results = list(ddg_client.text(q, max_results=n))
+        finally:
+            pass
     except Exception as e:
         logger.warning("web_search failed for %r: %s", q, e)
         return f"Web search could not be completed: {e}"

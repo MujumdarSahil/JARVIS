@@ -39,6 +39,32 @@ memory:
   persist: true
   file: "jarvis_memory.json"
 
+yamldatabase:
+  enabled: false
+  uri: "mongodb://localhost:27017"
+  name: "jarvis"
+
+agents:
+  enabled: false
+  orchestrator:
+    max_parallel_tasks: 3
+    planning_model: "groq"
+    synthesis_model: "groq"
+  research:
+    enabled: true
+    max_search_results: 8
+    deep_research_depth: 2
+  coder:
+    enabled: true
+    default_language: "python"
+    execution_timeout: 15
+  planner:
+    enabled: true
+  memory:
+    enabled: true
+    extraction_interval: 10
+    min_importance: 5
+
 yamlvoice:
   enabled: false
   auto_speak: true

@@ -53,11 +53,17 @@ ROUTING EXAMPLES (learn these patterns):
 "show my CPU usage" → {"tool":"shell","action":"get_system_info","params":{}}
 "run ipconfig" → {"tool":"shell","action":"run","params":{"command":"ipconfig"}}
 "turn on living room lights" → {"tool":"smarthome","action":"control_device","params":{"command":"turn on living room lights"}}
+"make a plan to learn X" → {"tool":"direct","action":"direct","params":{}}
+"create a 30 day plan for X" → {"tool":"direct","action":"direct","params":{}}
+"plan to become X" → {"tool":"direct","action":"direct","params":{}}
+"how do I learn X in N days" → {"tool":"direct","action":"direct","params":{}}
+"roadmap for X" → {"tool":"direct","action":"direct","params":{}}
 
 RULES:
 - Use "direct" for greetings, math, general knowledge, opinions, anything that doesn't need a tool
 - Use "search" ONLY when the user needs current/live information (news, prices, scores, weather)
-- Use "code" when user says "write", "create", "generate", "make" + any code-related words
+- Use "code" only when the user wants programming source code (languages, functions, scripts, APIs) — not for life/career/learning plans (those are "direct")
+- Use "code" when user says "write", "create", "generate", "make" + code-related words (python, javascript, function, class, bug, compile)
 - Return ONLY the JSON object. Absolutely no other text.
 
 Legacy schema (still supported): direct answer with {"tool":"direct","action":"none","params":{},"direct_response":true,"final_response":"..."}
@@ -217,6 +223,7 @@ class ToolRegistry:
         search_skill: Any,
         skills_config: dict[str, Any] | None = None,
         smarthome_skill: Any | None = None,
+        orchestrator: Any | None = None,
     ) -> None:
         self.brain = brain
         self.file_skill = file_skill
@@ -226,6 +233,7 @@ class ToolRegistry:
         self.code_skill = code_skill
         self.search_skill = search_skill
         self.smarthome_skill = smarthome_skill
+        self.orchestrator = orchestrator
         self._skills_config_override: dict[str, Any] | None = (
             dict(skills_config) if isinstance(skills_config, dict) else None
         )
@@ -357,7 +365,84 @@ class ToolRegistry:
             )
         return {"success": False, "result": "", "error": f"Unknown tool: {tool}"}
 
+    def _agents_enabled(self) -> bool:
+        cfg = getattr(self.brain, "_config", {}) or {}
+        ag = cfg.get("agents")
+        return bool(isinstance(ag, dict) and ag.get("enabled", True))
+
+    def _direct_chat(self, user_message: str, conversation_history: list[dict[str, str]]) -> dict[str, Any]:
+        """Bypass all tools — go straight to LLM for conversational response."""
+        try:
+            response = self.brain.chat(conversation_history)
+            return {
+                "tool_used": "direct",
+                "action": "direct",
+                "raw_result": {},
+                "final_response": response,
+                "response": response,
+            }
+        except Exception as e:
+            return {
+                "tool_used": "direct",
+                "action": "direct",
+                "raw_result": {},
+                "final_response": str(e),
+                "response": str(e),
+            }
+
     def route(self, user_message: str, conversation_history: list[dict[str, str]]) -> dict[str, Any]:
+        """
+        When an orchestrator is configured and enabled, run multi-agent routing first.
+        On failure, use the legacy tool router (LLM JSON + skills).
+        """
+        msg_lower = (user_message or "").lower().strip()
+
+        greet_starts = (
+            "hello",
+            "hi ",
+            "hey",
+            "good morning",
+            "good night",
+            "how are you",
+        )
+        if any(msg_lower.startswith(w) for w in greet_starts) or msg_lower in ("hi", "hey"):
+            return self._direct_chat(user_message, conversation_history)
+
+        planning_keywords = [
+            "make a plan",
+            "create a plan",
+            "30 day",
+            "roadmap",
+            "how do i learn",
+            "how to become",
+            "step by step guide",
+            "teach me how",
+        ]
+        if any(kw in msg_lower for kw in planning_keywords):
+            return self._direct_chat(user_message, conversation_history)
+
+        if re.match(r"^[\d\s\+\-\*\/\(\)\.\^%]+$", msg_lower):
+            return self._direct_chat(user_message, conversation_history)
+
+        if self.orchestrator is not None and self._agents_enabled():
+            try:
+                out = self.orchestrator.route(user_message, conversation_history)
+                resp = (out.get("response") or "").strip()
+                return {
+                    "tool_used": "orchestrator",
+                    "action": "agents",
+                    "raw_result": out,
+                    "final_response": resp,
+                    "response": resp,
+                    "agents_used": list(out.get("agents_used") or []),
+                    "tasks_completed": int(out.get("tasks_completed") or 0),
+                }
+            except Exception as e:
+                logger.warning("Orchestrator routing failed; falling back to skills: %s", e)
+
+        return self._route_legacy(user_message, conversation_history)
+
+    def _route_legacy(self, user_message: str, conversation_history: list[dict[str, str]]) -> dict[str, Any]:
         """
         Plan with the LLM, optionally run a tool, then ask the LLM to summarize.
 
@@ -393,11 +478,13 @@ class ToolRegistry:
                     final_response = self.brain.chat(summarize_messages)
                     if not (final_response or "").strip():
                         final_response = _tool_preview(raw_result)
+                    fr = final_response.strip()
                     return {
                         "tool_used": str(fast["tool"]),
                         "action": str(fast["action"]),
                         "raw_result": raw_result if isinstance(raw_result, dict) else {"value": raw_result},
-                        "final_response": final_response.strip(),
+                        "final_response": fr,
+                        "response": fr,
                     }
 
             tools_txt = self.get_tools_description()
@@ -424,6 +511,7 @@ class ToolRegistry:
                     "action": "brain.chat",
                     "raw_result": {},
                     "final_response": final,
+                    "response": final,
                 }
 
             # FIXED: support router returning tool "direct" (new prompt) plus legacy direct_response flag
@@ -436,6 +524,7 @@ class ToolRegistry:
                     "action": str(decision.get("action", "none")),
                     "raw_result": {},
                     "final_response": final,
+                    "response": final,
                 }
 
             tool = str(decision.get("tool", "")).lower().strip()
@@ -451,6 +540,7 @@ class ToolRegistry:
                     "action": "brain.chat",
                     "raw_result": {},
                     "final_response": final,
+                    "response": final,
                 }
 
             # FIXED: merge router text params from user_message before dispatch
@@ -479,11 +569,13 @@ class ToolRegistry:
             if not (final_response or "").strip():
                 final_response = _tool_preview(raw_result)
 
+            fr = final_response.strip()
             return {
                 "tool_used": tool,
                 "action": action,
                 "raw_result": raw_result if isinstance(raw_result, dict) else {"value": raw_result},
-                "final_response": final_response.strip(),
+                "final_response": fr,
+                "response": fr,
             }
         except Exception as e:
             logger.exception("ToolRegistry.route failed: %s", e)
@@ -497,6 +589,7 @@ class ToolRegistry:
                 "action": "brain.chat",
                 "raw_result": {"error": str(e)},
                 "final_response": final,
+                "response": final,
             }
 
 

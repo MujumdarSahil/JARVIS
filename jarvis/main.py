@@ -4,9 +4,11 @@ Jarvis entrypoint: load configuration, wire core services, voice stack, and CLI.
 
 from __future__ import annotations
 
+import gc
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 # Project root (directory containing this file) must be importable.
 _ROOT = Path(__file__).resolve().parent
@@ -19,8 +21,10 @@ import webbrowser
 import yaml
 from rich.console import Console
 
+from core.agents import CoderAgent, MemoryAgent, Orchestrator, PlannerAgent, ResearchAgent
 from core.brain import Brain
 from core.context import Context
+from core.db import db
 from core.memory import Memory
 from interface.cli import CLI
 from skills.code.assistant import CodeAssistant
@@ -62,6 +66,9 @@ def load_config(path: Path) -> dict:
 
     if "smarthome" not in data and "yamlsmarthome" in data:
         data["smarthome"] = data["yamlsmarthome"]
+
+    if "database" not in data and "yamldatabase" in data:
+        data["database"] = data["yamldatabase"]
 
     return data
 
@@ -122,9 +129,21 @@ def main() -> None:
     config_path = _ROOT / "config.yaml"
     config = load_config(config_path)
 
+    _boot_console = Console(highlight=False, stderr=False)
+    dcfg = config.get("database") or {}
+    db_ok = False
+    if isinstance(dcfg, dict) and bool(dcfg.get("enabled", True)):
+        db_ok = db.connect(
+            uri=str(dcfg.get("uri") or "mongodb://localhost:27017"),
+            db_name=str(dcfg.get("name") or "jarvis"),
+        )
+    if db_ok:
+        _boot_console.print("[green][DB] Connected to MongoDB — jarvis database ready[/green]")
+    else:
+        _boot_console.print("[yellow][DB] MongoDB unavailable — using local fallback[/yellow]")
+
     brain = Brain(config_path)
     # FIXED: startup probe so CLI banner shows a real active provider when keys work
-    _boot_console = Console(highlight=False, stderr=False)
     try:
         _probe = brain.chat([{"role": "user", "content": "reply with exactly: JARVIS_ONLINE"}])
         _ok_probe = bool(
@@ -153,7 +172,18 @@ def main() -> None:
             "[red][WARN] No AI provider available — check your API keys in config.yaml[/red]",
         )
 
-    memory = Memory(config, base_dir=_ROOT)
+    agents_cfg = config.get("agents") if isinstance(config.get("agents"), dict) else {}
+    agents_on = bool(agents_cfg.get("enabled", False))
+    memory_agent = None
+    if agents_on and bool((agents_cfg.get("memory") or {}).get("enabled", True)):
+        memory_agent = MemoryAgent(
+            "memory",
+            brain,
+            db,
+            dict(agents_cfg.get("memory") or {}),
+        )
+
+    memory = Memory(config, base_dir=_ROOT, memory_agent=memory_agent)
     context = Context(config, base_dir=_ROOT)
 
     file_skill = FileSkill()
@@ -219,6 +249,55 @@ def main() -> None:
         code_assistant,
         search_skill,
         smarthome_skill=smarthome_skill,
+        orchestrator=None,
+    )
+
+    orchestrator = None
+    if agents_on:
+        sub: dict[str, Any] = {}
+        if bool((agents_cfg.get("research") or {}).get("enabled", True)):
+            sub["research"] = ResearchAgent(
+                "research",
+                brain,
+                db,
+                dict(agents_cfg.get("research") or {}),
+            )
+        if bool((agents_cfg.get("coder") or {}).get("enabled", True)):
+            sub["coder"] = CoderAgent(
+                "coder",
+                brain,
+                db,
+                dict(agents_cfg.get("coder") or {}),
+                code_assistant=code_assistant,
+            )
+        if bool((agents_cfg.get("planner") or {}).get("enabled", True)):
+            sub["planner"] = PlannerAgent(
+                "planner",
+                brain,
+                db,
+                dict(agents_cfg.get("planner") or {}),
+            )
+        if memory_agent is not None:
+            sub["memory"] = memory_agent
+        orch_cfg = dict(agents_cfg.get("orchestrator") or {})
+        orchestrator = Orchestrator(
+            brain,
+            db,
+            orch_cfg,
+            sub,
+            registry=registry,
+        )
+        registry.orchestrator = orchestrator
+
+    n_agents = (len(getattr(orchestrator, "_agents", {}) or {}) + 1) if orchestrator else 0
+    mem_stored = 0
+    try:
+        if db.available:
+            mem_stored = db.count("memories", {})
+    except Exception:
+        mem_stored = 0
+    _boot_console.print(
+        f"[cyan]Agents active:[/cyan] {n_agents}  [cyan]Memories (DB):[/cyan] {mem_stored}",
     )
 
     listener, speaker, voice_cfg = _build_voice_hardware(config)
@@ -300,6 +379,14 @@ def main() -> None:
             except Exception as e:
                 logger.warning("Web interface stop: %s", e)
         cli.shutdown_voice()
+        gc.collect()
+
+
+# To verify fixes, test these inputs after restart:
+# 1. "what is the latest news today"  → should show real news headlines
+# 2. "make a plan to learn ML in 30 days"  → should give structured plan, no code tool
+# 3. "write python code to add 2 numbers"  → should give clean code output
+# 4. python -m core.db  → should show actual MongoDB error reason
 
 
 if __name__ == "__main__":

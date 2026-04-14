@@ -4,6 +4,7 @@ LLM router: tries the primary model provider, then fallbacks, with logging.
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -83,6 +84,17 @@ class Brain:
         cfg = providers.get(name)
         return cfg if isinstance(cfg, dict) else {}
 
+    def _max_tokens_for_provider(self, provider_name: str) -> int:
+        """Output token cap per provider (OpenAI-compatible chat.completions)."""
+        key = (provider_name or "").strip().lower()
+        if key == "groq":
+            return 4096
+        if key == "ollama":
+            return 4096
+        if key == "openrouter":
+            return 2048
+        return 2048
+
     def _openai_compatible_chat(
         self,
         provider_name: str,
@@ -115,6 +127,7 @@ class Brain:
                 model=model,
                 messages=messages,
                 temperature=0.7,
+                max_tokens=self._max_tokens_for_provider(provider_name),
             )
             choice = response.choices[0].message
             content = (choice.content or "").strip()
@@ -165,6 +178,10 @@ class Brain:
 
             genai.configure(api_key=api_key)
             model = genai.GenerativeModel(model_name, system_instruction=system_instruction)
+            try:
+                gen_cfg = genai.GenerationConfig(max_output_tokens=2048)
+            except Exception:
+                gen_cfg = {"max_output_tokens": 2048}
 
             if not conv:
                 return None, "no user messages"
@@ -179,18 +196,42 @@ class Brain:
             # Normalize history: Gemini expects strict user/model alternation starting with user.
             chat = model.start_chat(history=history)
             user_text = last["parts"][0] if last.get("parts") else ""
-            response = chat.send_message(user_text)
+            response = chat.send_message(user_text, generation_config=gen_cfg)
             text = (response.text or "").strip() if response else ""
             return (text if text else None), None
         except Exception as e:
             logger.warning("Provider %s error: %s", provider_name, e)
             return None, f"{type(e).__name__}: {e}"
 
-    def chat(self, messages: list[dict[str, str]]) -> str:
+    def text_fingerprint(self, text: str) -> str:
+        """Stable SHA-256 hex of normalized text for deduplication / embedding keys."""
+        norm = " ".join((text or "").strip().lower().split())
+        return hashlib.sha256(norm.encode("utf-8")).hexdigest()
+
+    def estimate_tokens(self, text: str) -> int:
+        """Rough token estimate for logging (not exact)."""
+        if not text:
+            return 0
+        return max(1, len(text) // 4)
+
+    def embed_text_placeholder(self, text: str) -> str | None:
+        """
+        Placeholder for future embedding API integration.
+        Returns None when no embedding model is configured; use :meth:`text_fingerprint` for dedupe keys.
+        """
+        _ = text
+        return None
+
+    def chat(
+        self,
+        messages: list[dict[str, str]],
+        preferred_provider: str | None = None,
+    ) -> str:
         """
         Send ``messages`` to the first working provider in the configured chain.
 
         ``messages`` must be OpenAI-style dicts with ``role`` and ``content``.
+        If ``preferred_provider`` is set, that provider is tried first, then the rest of the chain.
         """
         self._total_calls += 1
         tried: list[str] = []
@@ -202,6 +243,12 @@ class Brain:
             return "I did not receive any messages to process, Sir."
 
         chain = self._provider_chain()
+        pref = (preferred_provider or "").strip().lower()
+        if pref and pref in chain:
+            chain = [pref] + [p for p in chain if p != pref]
+        elif pref and pref not in chain:
+            chain = [pref] + chain
+
         if not chain:
             self._active_provider = "none"
             self._last_providers_tried = []

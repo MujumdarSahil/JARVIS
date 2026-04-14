@@ -165,6 +165,11 @@ class CLI:
         """Print Jarvis reply word-by-word for a subtle typing effect."""
         if not self._markdown_in_terminal_enabled():
             text = self._clean_for_terminal(text)
+        tail = text.rstrip()
+        if len(tail) > 200:
+            last20 = tail[-20:]
+            if not re.search(r"[.!?]", last20):
+                text = tail + "..."
         prefix = Text("[JARVIS] ", style="bold cyan")
         words = text.split()
         with self._io_lock:
@@ -208,7 +213,7 @@ class CLI:
         try:
             if self._registry is not None:
                 routed = self._registry.route(user_line, messages)
-                reply = (routed.get("final_response") or "").strip()
+                reply = (routed.get("final_response") or routed.get("response") or "").strip()
                 tool_used = str(routed.get("tool_used") or "")
                 action = str(routed.get("action") or "")
                 if tool_used and tool_used not in ("chat", "direct"):

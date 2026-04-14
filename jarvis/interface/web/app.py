@@ -82,7 +82,15 @@ class WebInterface:
 
         CORS(self.app, resources={r"/*": {"origins": "*"}})
 
-        self.socketio = SocketIO(self.app, cors_allowed_origins="*", async_mode="threading")
+        # Waitress (and most pure WSGI servers) cannot expose the TCP socket for WebSocket
+        # upgrades. Use Engine.IO long-polling only — still works with Socket.IO client.
+        self.socketio = SocketIO(
+            self.app,
+            cors_allowed_origins="*",
+            async_mode="threading",
+            allow_upgrades=False,
+            transports=["polling"],
+        )
 
         self.app.register_blueprint(create_api_blueprint(self))
 
@@ -182,7 +190,7 @@ class WebInterface:
         messages = self._build_llm_messages()
         try:
             routed = self.registry.route(user_line, messages)
-            reply = (routed.get("final_response") or "").strip()
+            reply = (routed.get("final_response") or routed.get("response") or "").strip()
             tool_used = str(routed.get("tool_used") or "")
             action = str(routed.get("action") or "")
             if not reply:
@@ -423,16 +431,31 @@ class WebInterface:
 
         def run_server() -> None:
             try:
-                self.socketio.run(
+                # Waitress avoids Werkzeug 3 + threaded SocketIO "write() before start_response" crashes.
+                import waitress
+
+                listen = f"{host}:{port}"
+                logger.info("Web server (waitress) listening on %s", listen)
+                # Flask-SocketIO replaces app.wsgi_app with middleware; serve the Flask app, not socketio.
+                waitress.serve(
                     self.app,
-                    host=host,
-                    port=port,
-                    debug=debug,
-                    use_reloader=False,
-                    allow_unsafe_werkzeug=True,
+                    listen=listen,
+                    threads=6,
                 )
+            except ImportError:
+                try:
+                    self.socketio.run(
+                        self.app,
+                        host=host,
+                        port=port,
+                        debug=debug,
+                        use_reloader=False,
+                        allow_unsafe_werkzeug=True,
+                    )
+                except Exception as e:
+                    logger.exception("Flask-SocketIO server exited: %s", e)
             except Exception as e:
-                logger.exception("Flask-SocketIO server exited: %s", e)
+                logger.exception("Web server exited: %s", e)
 
         self._thread = threading.Thread(target=run_server, name="jarvis-web", daemon=True)
         self._thread.start()

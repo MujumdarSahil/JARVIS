@@ -60,8 +60,10 @@
     this.startClock();
     this.startUptimeCounter();
 
+    // Polling only: WSGI servers (e.g. Waitress) do not support WebSocket upgrade.
     this.socket = io(window.location.origin, {
-      transports: ["websocket", "polling"],
+      transports: ["polling"],
+      upgrade: false,
       reconnection: true,
       reconnectionDelay: 1000,
       reconnectionAttempts: Infinity,
