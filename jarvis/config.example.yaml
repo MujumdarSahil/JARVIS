@@ -15,6 +15,21 @@ yamlweb:
   debug: false
   open_browser: true
 
+vision:
+  enabled: true
+  screenshot_dir: "screenshots"
+  ocr_enabled: false
+  vision_model: "gemini"
+
+notifications:
+  enabled: true
+  desktop: true
+  web_push: true
+  sound: false
+
+pwa:
+  enabled: true
+
 models:
   primary: "groq"
   fallback: ["gemini", "openrouter", "ollama"]

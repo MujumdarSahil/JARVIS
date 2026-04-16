@@ -62,6 +62,10 @@ Available agents (use exact agent keys in JSON):
   Examples: "Remember I prefer dark mode", "What did I tell you about my job?", "Recall my dietary restrictions"
 - tool_router — Files, shell, clipboard, apps, smart home via Jarvis tools (NOT web/code/planning).
   Examples: "List my Downloads folder", "Run ipconfig", "Open Chrome", "Turn on living room lights", "Read file X"
+- vision — Screenshots, OCR, image analysis, and visual change monitoring.
+  Examples: "take a screenshot", "what's on my screen", "read text from screen", "analyze this image: C:/x.png"
+- notifier — Reminders and proactive notifications.
+  Examples: "remind me in 10 minutes to stretch", "set a reminder for 3pm to call mom", "notify me when download finishes"
 
 Routing patterns (learn these):
 - "Hello" / small talk / general trivia with no tools → direct_answer true
@@ -70,12 +74,16 @@ Routing patterns (learn these):
 - Multi-part: "search X and then write code for Y" → sequential: research then coder
 - Independent: "summarize Python decorators AND look up today's gold price" → parallel: coder + research
 - Smart home / local files / terminal → tool_router
+- "take a screenshot" / "what's on my screen" / "read text from screen" → vision
+- "analyze this image: path/url" → vision with action analyze_image
+- "remind me in X minutes to Y" / "set a reminder for HH:MM to Y" → notifier
+- "notify me when X" → vision watch + notifier
 - "Plan how to …" without immediate execution → planner first, optionally sequential with other agents
 
 Return ONLY valid JSON:
 {
   "strategy": "single" | "parallel" | "sequential",
-  "agents": ["research"|"coder"|"planner"|"memory"|"tool_router"],
+  "agents": ["research"|"coder"|"planner"|"memory"|"tool_router"|"vision"|"notifier"],
   "subtasks": [
     {
       "agent": "research",
@@ -121,7 +129,9 @@ class Orchestrator(BaseAgent):
             "coder: code write/debug/explain/review/run Python\n"
             "planner: structured multi-step plans\n"
             "memory: recall/save user-specific long-term facts\n"
-            "tool_router: files, shell, clipboard, apps, smarthome via existing Jarvis tools"
+            "tool_router: files, shell, clipboard, apps, smarthome via existing Jarvis tools\n"
+            "vision: screenshots, OCR, image analysis, monitor for screen changes\n"
+            "notifier: reminders and push/desktop notifications"
         )
 
     def plan(self, user_message: str, history: list[dict[str, str]]) -> dict[str, Any]:
@@ -201,6 +211,33 @@ class Orchestrator(BaseAgent):
             }
         if name == "tool_router":
             return self._dispatch_tool(st, user_message)
+        if name == "notifier":
+            notifier = self._agents.get("notifier")
+            if notifier is None:
+                return {"success": False, "result": "notifier unavailable", "agent": "notifier", "task_id": tid, "duration_ms": 0}
+            action = str(task["params"].get("action") or "").strip().lower()
+            try:
+                if action == "schedule_reminder":
+                    out = notifier.schedule_reminder(
+                        str(task["params"].get("text") or user_message),
+                        int(task["params"].get("delay_seconds") or 60),
+                    )
+                elif action == "schedule_reminder_at":
+                    out = notifier.schedule_reminder_at(
+                        str(task["params"].get("text") or user_message),
+                        str(task["params"].get("time_str") or "14:30"),
+                    )
+                elif action == "notify":
+                    out = notifier.notify(
+                        str(task["params"].get("title") or "JARVIS"),
+                        str(task["params"].get("message") or user_message),
+                        str(task["params"].get("urgency") or "normal"),
+                    )
+                else:
+                    out = {"success": False, "error": f"Unknown notifier action: {action}"}
+                return {"success": bool(out.get("success", True)), "result": out, "agent": "notifier", "task_id": tid, "duration_ms": 0}
+            except Exception as e:
+                return {"success": False, "result": str(e), "agent": "notifier", "task_id": tid, "duration_ms": 0}
         return agent.execute(task)
 
     def execute(self, task: dict[str, Any]) -> dict[str, Any]:

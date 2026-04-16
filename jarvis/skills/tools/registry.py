@@ -302,6 +302,10 @@ class ToolRegistry:
             "- apps: open_app, open_url, add_alias, get_app_aliases",
             "- code: generate, explain, debug, review, convert, run_snippet",
             "- search: web_search",
+            "- vision.screenshot: capture and describe the screen",
+            "- vision.analyze_image: analyze an image path or URL",
+            "- vision.read_screen: OCR the current screen",
+            "- notify.remind: set a reminder with delay or exact time",
             "- direct: no tool needed, answer from knowledge",
         ]
         if self.smarthome_skill is not None and self._enabled("smarthome", True):
@@ -423,6 +427,49 @@ class ToolRegistry:
 
         if re.match(r"^[\d\s\+\-\*\/\(\)\.\^%]+$", msg_lower):
             return self._direct_chat(user_message, conversation_history)
+
+        vision_keywords = [
+            "screenshot",
+            "screen",
+            "what's on my",
+            "whats on my",
+            "take a picture",
+            "analyze image",
+            "read image",
+            "what do you see",
+        ]
+        if any(kw in msg_lower for kw in vision_keywords) and self.orchestrator is not None:
+            try:
+                out = self.orchestrator.route(user_message, conversation_history)
+                resp = (out.get("response") or "").strip()
+                return {
+                    "tool_used": "orchestrator",
+                    "action": "agents",
+                    "raw_result": out,
+                    "final_response": resp,
+                    "response": resp,
+                    "agents_used": list(out.get("agents_used") or []),
+                    "tasks_completed": int(out.get("tasks_completed") or 0),
+                }
+            except Exception:
+                pass
+
+        reminder_keywords = ["remind me", "set a reminder", "notify me", "alert me", "reminder for"]
+        if any(kw in msg_lower for kw in reminder_keywords) and self.orchestrator is not None:
+            try:
+                out = self.orchestrator.route(user_message, conversation_history)
+                resp = (out.get("response") or "").strip()
+                return {
+                    "tool_used": "orchestrator",
+                    "action": "agents",
+                    "raw_result": out,
+                    "final_response": resp,
+                    "response": resp,
+                    "agents_used": list(out.get("agents_used") or []),
+                    "tasks_completed": int(out.get("tasks_completed") or 0),
+                }
+            except Exception:
+                pass
 
         if self.orchestrator is not None and self._agents_enabled():
             try:

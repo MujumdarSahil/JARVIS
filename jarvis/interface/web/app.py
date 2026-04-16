@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from flask import Flask, render_template, request
+from flask import Flask, render_template, request, send_from_directory
 from flask_cors import CORS
 from flask_socketio import SocketIO
 
@@ -39,6 +39,7 @@ class WebInterface:
         context: Any = None,
         device_manager: Any = None,
         routine_manager: Any = None,
+        notifier: Any = None,
     ) -> None:
         self.brain = brain
         self.memory = memory
@@ -49,6 +50,7 @@ class WebInterface:
         self.context = context
         self.device_manager = device_manager
         self.routine_manager = routine_manager
+        self.notifier = notifier
         if self.context is None:
             base = _WEB_ROOT.parent.parent
             self.context = Context(self.config, base_dir=base)
@@ -103,6 +105,16 @@ class WebInterface:
                 smarthome_enabled=self._smarthome_enabled,
                 smarthome_ha_ready=self._smarthome_ha_ready,
             )
+
+        @self.app.route("/sw.js")
+        def service_worker():
+            web_dir = _WEB_ROOT
+            return send_from_directory(str(web_dir), "sw.js", mimetype="application/javascript")
+
+        @self.app.route("/manifest.json")
+        def manifest():
+            static_dir = _WEB_ROOT / "static"
+            return send_from_directory(str(static_dir), "manifest.json", mimetype="application/manifest+json")
 
         self._register_socket_handlers()
 
@@ -268,6 +280,15 @@ class WebInterface:
                     to=request.sid,
                 )
                 self._maybe_speak_web(reply)
+                if self.notifier is not None and bool((self.config.get("notifications") or {}).get("web_push", True)):
+                    low = reply.lower()
+                    urgency_words = ("error", "failed", "complete", "done", "finished")
+                    if any(w in low for w in urgency_words):
+                        self.notifier.notify(
+                            title="JARVIS Update",
+                            message=reply[:300],
+                            urgency="urgent" if ("error" in low or "failed" in low) else "normal",
+                        )
             except Exception as e:
                 logger.exception("user_message handler: %s", e)
                 try:
@@ -287,6 +308,24 @@ class WebInterface:
                     )
                 except Exception as e2:
                     logger.exception("emit error response failed: %s", e2)
+
+        @self.socketio.on("set_reminder")
+        def handle_reminder(data):
+            try:
+                payload = data if isinstance(data, dict) else {}
+                if self.notifier is None:
+                    self.socketio.emit("reminder_ack", {"ok": False, "error": "Notifier unavailable"}, to=request.sid)
+                    return
+                text = str(payload.get("text") or "Reminder")
+                if "delay_seconds" in payload:
+                    out = self.notifier.schedule_reminder(text, int(payload.get("delay_seconds") or 60))
+                elif "time_str" in payload:
+                    out = self.notifier.schedule_reminder_at(text, str(payload.get("time_str") or "14:30"))
+                else:
+                    out = {"success": False, "error": "Provide delay_seconds or time_str"}
+                self.socketio.emit("reminder_ack", {"ok": bool(out.get("success")), "data": out}, to=request.sid)
+            except Exception as e:
+                self.socketio.emit("reminder_ack", {"ok": False, "error": str(e)}, to=request.sid)
 
         @self.socketio.on("voice_toggle")
         def on_voice_toggle(data):

@@ -1,0 +1,37 @@
+{
+  "name": "JARVIS AI Assistant",
+  "short_name": "JARVIS",
+  "description": "Just A Rather Very Intelligent System",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0a0f",
+  "theme_color": "#00d4ff",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/static/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/static/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["productivity", "utilities"],
+  "shortcuts": [
+    {
+      "name": "New Chat",
+      "url": "/?action=new_chat",
+      "description": "Start a new conversation"
+    },
+    {
+      "name": "Screenshot",
+      "url": "/?action=screenshot",
+      "description": "Take a screenshot"
+    }
+  ]
+}

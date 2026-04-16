@@ -21,15 +21,17 @@ import webbrowser
 import yaml
 from rich.console import Console
 
-from core.agents import CoderAgent, MemoryAgent, Orchestrator, PlannerAgent, ResearchAgent
+from core.agents import CoderAgent, MemoryAgent, Orchestrator, PlannerAgent, ResearchAgent, VisionAgent
 from core.brain import Brain
 from core.context import Context
 from core.db import db
 from core.memory import Memory
 from interface.cli import CLI
 from skills.code.assistant import CodeAssistant
+from skills.notifications import Notifier
 from skills.search.websearch import SearchSkill
 from skills.system import AppSkill, ClipboardSkill, FileSkill, ShellSkill
+from skills.vision import ImageAnalyzer, ScreenSkill
 from skills.smarthome import (
     DeviceManager,
     HomeAssistantClient,
@@ -39,6 +41,7 @@ from skills.smarthome import (
 )
 from skills.tools.registry import ToolRegistry
 from utils.logger import get_logger
+from utils.generate_icons import generate_icons
 
 logger = get_logger(__name__)
 
@@ -192,6 +195,32 @@ def main() -> None:
     app_skill = AppSkill(config_path, brain=brain)
     code_assistant = CodeAssistant(brain)
     search_skill = SearchSkill()
+    screen_skill = ScreenSkill(str(_ROOT / str((config.get("vision") or {}).get("screenshot_dir", "screenshots"))))
+    image_analyzer = ImageAnalyzer(config)
+    notifier = Notifier(config, db=db)
+
+    try:
+        monitors = screen_skill.get_monitors()
+        monitor_count = len([m for m in monitors if isinstance(m, dict) and "index" in m])
+        print(f"\033[96m[VISION] Screen capture ready — {monitor_count} monitors detected\033[0m")
+    except Exception:
+        pass
+    try:
+        if bool((config.get("notifications") or {}).get("desktop", True)):
+            print("\033[96m[NOTIFY] Desktop notifications enabled\033[0m")
+    except Exception:
+        pass
+
+    try:
+        (_ROOT / "screenshots").mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    try:
+        icon_192 = _ROOT / "interface" / "web" / "static" / "icons" / "icon-192.png"
+        if not icon_192.exists():
+            generate_icons(_ROOT)
+    except Exception as e:
+        logger.warning("Icon generation skipped: %s", e)
 
     device_manager = None
     routine_manager = None
@@ -279,6 +308,16 @@ def main() -> None:
             )
         if memory_agent is not None:
             sub["memory"] = memory_agent
+        if bool((config.get("vision") or {}).get("enabled", True)):
+            sub["vision"] = VisionAgent(
+                brain=brain,
+                db=db,
+                config=dict(config.get("vision") or {}),
+                screen_skill=screen_skill,
+                image_analyzer=image_analyzer,
+            )
+        if bool((config.get("notifications") or {}).get("enabled", True)):
+            sub["notifier"] = notifier
         orch_cfg = dict(agents_cfg.get("orchestrator") or {})
         orchestrator = Orchestrator(
             brain,
@@ -350,8 +389,10 @@ def main() -> None:
                 context=context,
                 device_manager=device_manager,
                 routine_manager=routine_manager,
+                notifier=notifier,
             )
             web_iface.start(host=host, port=port, debug=debug)
+            notifier.set_socketio(web_iface.socketio)
             print(f"\033[96m[WEB] Interface running at http://localhost:{port}\033[0m")
             if bool(web_cfg.get("open_browser", True)):
 

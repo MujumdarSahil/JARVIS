@@ -3,7 +3,9 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#00d4ff" />
     <title>J.A.R.V.I.S — HUD</title>
+    <link rel="manifest" href="/static/manifest.json" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -199,6 +201,7 @@
 
     <script src="https://cdn.socket.io/4.5.4/socket.io.min.js" crossorigin="anonymous"></script>
     <script src="{{ url_for('static', filename='js/jarvis.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/pwa.js') }}"></script>
     <script>
       (function () {
         if (typeof io === "undefined") {
@@ -216,6 +219,7 @@
             smarthomeHaReady: {{ smarthome_ha_ready | tojson }},
           });
           ui.init();
+          window.jarvisUI = ui;
         });
       })();
     </script>

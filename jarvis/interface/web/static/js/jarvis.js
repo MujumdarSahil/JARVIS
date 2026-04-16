@@ -127,6 +127,12 @@
     this.socket.on("device_update", function (data) {
       self.applyDeviceUpdate(data || {});
     });
+
+    this.socket.on("push_notification", function (data) {
+      var payload = data || {};
+      window.jarvisPWA?.showLocalNotification(payload.title || "JARVIS", payload.message || "");
+      self.showToast(payload.title || "JARVIS", payload.message || "", payload.urgency || "normal");
+    });
   };
 
   JarvisUI.prototype.bindDom = function () {
@@ -429,6 +435,32 @@
       "</div>";
     box.appendChild(div);
     this.scrollChat();
+  };
+
+  JarvisUI.prototype.showToast = function (title, message, urgency) {
+    var container = document.getElementById("jarvis-toast-container");
+    if (!container) {
+      container = document.createElement("div");
+      container.id = "jarvis-toast-container";
+      container.style.cssText = "position:fixed;top:12px;right:12px;z-index:9999;display:flex;flex-direction:column;gap:8px";
+      document.body.appendChild(container);
+    }
+    var toast = document.createElement("div");
+    var border = urgency === "urgent" ? "#ff8c00" : "#00d4ff";
+    toast.style.cssText =
+      "min-width:240px;max-width:360px;background:#0f1720;color:#e8f4ff;border:1px solid " +
+      border +
+      ";padding:10px 12px;border-radius:8px;box-shadow:0 6px 16px rgba(0,0,0,.35);opacity:1;transition:opacity .35s ease";
+    toast.innerHTML = "<strong>" + esc(title || "JARVIS") + "</strong><div style='margin-top:4px'>" + esc(message || "") + "</div>";
+    var dismiss = function () {
+      toast.style.opacity = "0";
+      setTimeout(function () {
+        toast.remove();
+      }, 350);
+    };
+    toast.addEventListener("click", dismiss);
+    container.appendChild(toast);
+    setTimeout(dismiss, 5000);
   };
 
   JarvisUI.prototype.scrollChat = function () {
