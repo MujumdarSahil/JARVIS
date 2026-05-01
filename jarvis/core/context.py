@@ -17,7 +17,7 @@ class Context:
         self._config = config
         self._base_dir = base_dir if base_dir is not None else Path.cwd()
 
-    def get_system_prompt(self) -> str:
+    def get_system_prompt(self, emotion_addon: str = "") -> str:
         """
         Detailed system instructions: time, OS, cwd, persona, skills, output format.
         """
@@ -50,7 +50,7 @@ class Context:
             "never say what company made you. You are JARVIS. Always stay in character."
         )
 
-        return (
+        base = (
             header
             + f"In this deployment your display name is {name}. You are modeled after the Jarvis from Iron Man: "
             "highly intelligent, concise, efficient, and unfailingly helpful. "
@@ -65,3 +65,15 @@ class Context:
             "asterisks, or code fences) unless the user explicitly asks for Markdown or code blocks."
             + footer
         )
+        if (emotion_addon or "").strip():
+            return f"{base}\n\n{emotion_addon.strip()}"
+        return base
+
+    def get_enhanced_prompt(self, user_message: str, emotion_agent: Any = None) -> str:
+        base = self.get_system_prompt()
+        if emotion_agent is None:
+            return base
+        try:
+            return emotion_agent.get_enhanced_system_prompt(base, user_message)
+        except Exception:
+            return base

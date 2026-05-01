@@ -148,6 +148,25 @@ class Memory:
             return []
         return list(self._messages[-n:])
 
+    def get_compressed_context(self, max_tokens: int = 3000) -> list[dict[str, str]]:
+        msgs = list(self._messages)
+        if len(msgs) < 10:
+            return msgs
+        first = msgs[:2]
+        last = msgs[-6:]
+        middle = msgs[2:-6]
+        snippets: list[str] = []
+        for m in middle:
+            role = m.get("role", "user")
+            content = str(m.get("content") or "")[:50]
+            snippets.append(f"{role}: {content}")
+        summary = " | ".join(snippets)
+        return [
+            *first,
+            {"role": "system", "content": f"Earlier in conversation: {summary}"},
+            *last,
+        ]
+
     def drop_last(self) -> None:
         """Remove the most recent message if present (e.g. after a failed LLM call)."""
         if self._messages:

@@ -100,7 +100,7 @@ class CLI:
             s = s[: m.start()] + m.group(1).strip("\n") + s[m.end() :]
         s = re.sub(r"\*\*([^*]+)\*\*", r"\1", s)
         s = re.sub(r"(?m)^#+\s*", "", s)
-        s = re.sub(r"(?m)^(\s*)-\s+", r"\1• ", s)
+        s = re.sub(r"(?m)^(\s*)-\s+", r"\1- ", s)
         return s
 
     def _voice_stt_settings(self) -> dict[str, Any]:
@@ -189,6 +189,13 @@ class CLI:
 
     def _build_llm_messages(self) -> list[dict[str, str]]:
         system = self._context.get_system_prompt()
+        if self._registry is not None and getattr(self._registry, "emotion_agent", None) is not None:
+            try:
+                hist = self._memory.get_history()
+                latest_user = next((m.get("content", "") for m in reversed(hist) if m.get("role") == "user"), "")
+                system = self._context.get_enhanced_prompt(latest_user, self._registry.emotion_agent)
+            except Exception:
+                pass
         return [{"role": "system", "content": system}, *self._memory.get_history()]
 
     def _submit_user_text(
@@ -252,7 +259,7 @@ class CLI:
             return
 
         with self._io_lock:
-            self._console.print(Text("🎤 Listening (wake)...", style="yellow"))
+            self._console.print(Text("[mic] Listening (wake)...", style="yellow"))
 
         try:
             heard = self._listener.listen_once(timeout=10.0, phrase_limit=30.0)
@@ -273,8 +280,8 @@ class CLI:
         Text prompt or one voice utterance. Returns None on EOF-style exit request.
         """
         if self._voice_mode and self._listener and self._listener.available:
-            self._console.print(Text.from_markup("[bold green][You 🎤][/bold green] > "))
-            self._console.print(Text("🎤 Listening...", style="yellow"))
+            self._console.print(Text.from_markup("[bold green][You mic][/bold green] > "))
+            self._console.print(Text("[mic] Listening...", style="yellow"))
             try:
                 heard = self._listener.listen_once(timeout=10.0, phrase_limit=30.0)
             except Exception as e:
@@ -312,7 +319,7 @@ class CLI:
             chain = self._brain.get_configured_providers()
             self._console.print(
                 Text.from_markup(
-                    f"[yellow]Configured order:[/yellow] {' → '.join(chain) if chain else '—'}"
+                    f"[yellow]Configured order:[/yellow] {' -> '.join(chain) if chain else '(none)'}"
                 )
             )
             self._console.print(
@@ -338,6 +345,13 @@ class CLI:
                 "/speak <text> — speak text via TTS\n"
                 "/listen — one-shot microphone test\n"
                 "/voices — list English edge-tts voices\n"
+                "/schedule <task text> — schedule a recurring task\n"
+                "/tasks — list scheduled tasks\n"
+                "/monitors — list active monitors\n"
+                "/mood — show current detected mood\n"
+                "/performance — show self-improvement stats\n"
+                "/brief — generate morning brief\n"
+                "/daily — show autonomous activity summary\n"
                 "/exit — quit Jarvis"
             )
             self._console.print(Text(help_text, style="yellow"))
@@ -349,6 +363,75 @@ class CLI:
                 return True
             desc = self._registry.get_tools_description()
             self._console.print(Text(desc, style="cyan"))
+            return True
+
+        if cmd in ("/schedule", "/tasks", "/monitors", "/mood", "/performance", "/brief", "/daily"):
+            if not self._registry:
+                self._console.print(Text("Tool registry not available.", style="red"))
+                return True
+
+            if cmd == "/tasks":
+                out = self._registry.autonomous_agent.execute({"action": "list_tasks", "params": {}})
+                tasks = out.get("result") or []
+                if not tasks:
+                    self._console.print(Text("No scheduled tasks found.", style="yellow"))
+                else:
+                    table = Table(title="Scheduled Tasks")
+                    table.add_column("NAME", style="cyan")
+                    table.add_column("SCHEDULE", style="magenta")
+                    table.add_column("STATUS", style="green")
+                    table.add_column("LAST RUN", style="dim")
+                    for t in tasks:
+                        name = str(t.get("name", "unnamed"))
+                        sch = str(t.get("cron_expression") or t.get("schedule_str") or "unknown")
+                        status = "enabled" if t.get("enabled", True) else "disabled"
+                        lr = t.get("last_run")
+                        lr_str = time.strftime("%Y-%m-%d %H:%M", time.localtime(lr)) if lr else "never"
+                        table.add_row(name, sch, status, lr_str)
+                    self._console.print(table)
+                return True
+
+            if cmd == "/mood":
+                out = self._registry.emotion_agent.execute({"action": "get_mood", "params": {}})
+                res = out.get("result") or {}
+                curr = res.get("current", "neutral")
+                summary = res.get("summary", "Current mood is neutral.")
+                self._console.print(Text(f"Current mood: {curr}", style="bold cyan"))
+                self._console.print(Text("Sentiment trend: stable", style="cyan"))
+                self._console.print(Text(f"Summary: {summary}", style="italic"))
+                return True
+
+            if cmd == "/performance":
+                stats = self._registry.self_improvement_agent.get_performance_stats()
+                self._console.print(Text("Performance Stats:", style="bold cyan"))
+                self._console.print(f"Avg score (7 days): {stats.get('avg_score_7_days', '0.0')}/10")
+                self._console.print(f"Avg score (all time): {stats.get('avg_score_all_time', '0.0')}/10")
+                self._console.print(f"Total evaluated: {stats.get('total_evaluated', 0)}")
+                self._console.print(f"Poor responses: {stats.get('poor_percentage', 0.0)}%")
+                self._console.print(f"Top failure: {stats.get('top_failure', 'none')}")
+                self._console.print(f"Trend: {stats.get('trend', 'stable')}")
+                return True
+
+            if cmd == "/brief":
+                txt = self._registry.autonomy_reporter.generate_morning_brief()
+                self._console.print(txt)
+                return True
+
+            if cmd == "/schedule":
+                task_text = " ".join(parts[1:]).strip()
+                if not task_text:
+                    self._console.print(Text("Schedule a task: /schedule check news every day at 8am", style="yellow"))
+                    return True
+                msg = f"/schedule {task_text}"
+            elif cmd == "/daily":
+                msg = "/daily"
+            elif cmd == "/monitors":
+                msg = "/monitor list"
+            else:
+                msg = line # should not happen
+
+            routed = self._registry.route(msg, self._build_llm_messages())
+            self._type_response(str(routed.get("final_response") or routed.get("response") or ""))
             return True
 
         if cmd == "/run":
@@ -481,7 +564,7 @@ class CLI:
             if not self._ensure_listener():
                 self._console.print(Text("Listener unavailable.", style="red"))
                 return True
-            self._console.print(Text("🎤 Listening (one shot)...", style="yellow"))
+            self._console.print(Text("[mic] Listening (one shot)...", style="yellow"))
             try:
                 heard = self._listener.listen_once(timeout=10.0, phrase_limit=30.0)
             except Exception as e:
@@ -578,7 +661,7 @@ class CLI:
 
     def _show_startup_status(self) -> None:
         chain = self._brain.get_configured_providers()
-        chain_txt = " → ".join(chain) if chain else "(none configured)"
+        chain_txt = " -> ".join(chain) if chain else "(none configured)"
         self._console.print(Text.from_markup(f"[yellow]Provider order:[/yellow] {chain_txt}"))
         active = self._brain.get_active_provider()
         self._console.print(
@@ -602,7 +685,7 @@ class CLI:
             return "files, shell, clipboard, apps, code, search (defaults on)"
         enabled = [k for k, v in cfg.items() if v]
         disabled = [k for k, v in cfg.items() if not v]
-        en = ", ".join(enabled) if enabled else "—"
+        en = ", ".join(enabled) if enabled else "(none)"
         if disabled:
             return f"{en}  [dim](off: {', '.join(disabled)})[/dim]"
         return en

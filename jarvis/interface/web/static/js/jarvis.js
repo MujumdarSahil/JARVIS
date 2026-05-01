@@ -128,10 +128,19 @@
       self.applyDeviceUpdate(data || {});
     });
 
+    this.socket.on("mood_update", function (data) {
+      self.applyMoodUpdate(data || {});
+    });
+
     this.socket.on("push_notification", function (data) {
       var payload = data || {};
       window.jarvisPWA?.showLocalNotification(payload.title || "JARVIS", payload.message || "");
       self.showToast(payload.title || "JARVIS", payload.message || "", payload.urgency || "normal");
+    });
+
+    this.socket.on("autonomous_action", function (data) {
+      var p = data || {};
+      self.showToast("Autonomous action", (p.action || "task") + " via " + (p.trigger || "system"), "normal");
     });
   };
 
@@ -311,6 +320,14 @@
     if (el) el.textContent = name || "—";
     var hdr = document.getElementById("header-provider");
     if (hdr) hdr.textContent = name || "—";
+  };
+
+  JarvisUI.prototype.applyMoodUpdate = function (data) {
+    var dot = document.getElementById("mood-dot");
+    if (!dot) return;
+    var mood = String(data.mood || "neutral").toLowerCase();
+    dot.className = "mood-dot " + mood;
+    dot.title = "Mood: " + mood;
   };
 
   JarvisUI.prototype.updateStats = function (data) {

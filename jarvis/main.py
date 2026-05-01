@@ -21,11 +21,24 @@ import webbrowser
 import yaml
 from rich.console import Console
 
-from core.agents import CoderAgent, MemoryAgent, Orchestrator, PlannerAgent, ResearchAgent, VisionAgent
+from core.agents import (
+    AutonomousAgent,
+    CoderAgent,
+    EmotionAgent,
+    MemoryAgent,
+    Orchestrator,
+    PlannerAgent,
+    ResearchAgent,
+    SelfImprovementAgent,
+    VisionAgent,
+)
 from core.brain import Brain
 from core.context import Context
 from core.db import db
 from core.memory import Memory
+from core.emotion import MoodTracker, SentimentAnalyzer, ToneAdapter
+from core.improvement import LessonStore, PromptOptimizer, ResponseEvaluator
+from core.autonomy import ActivityReporter, ProactiveMonitor, TaskScheduler
 from interface.cli import CLI
 from skills.code.assistant import CodeAssistant
 from skills.notifications import Notifier
@@ -44,6 +57,26 @@ from utils.logger import get_logger
 from utils.generate_icons import generate_icons
 
 logger = get_logger(__name__)
+
+
+def _debug_log(location: str, message: str, data: dict[str, Any], run_id: str, hypothesis_id: str) -> None:
+    try:
+        import json
+        import time as _t
+
+        payload = {
+            "sessionId": "92b104",
+            "runId": run_id,
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": int(_t.time() * 1000),
+        }
+        with open("debug-92b104.log", "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
 
 
 def load_config(path: Path) -> dict:
@@ -279,7 +312,66 @@ def main() -> None:
         search_skill,
         smarthome_skill=smarthome_skill,
         orchestrator=None,
+        emotion_agent=None,
+        self_improvement_agent=None,
+        lesson_store=None,
+        prompt_optimizer=None,
+        autonomous_agent=None,
+        autonomy_reporter=None,
     )
+
+    emotion_cfg = config.get("emotion") or {}
+    improve_cfg = config.get("self_improvement") or {}
+    autonomy_cfg = config.get("autonomy") or {}
+
+    sentiment = SentimentAnalyzer()
+    mood = MoodTracker(db)
+    tone = ToneAdapter()
+    emotion_agent = EmotionAgent(brain, db, emotion_cfg, sentiment, mood, tone) if bool(emotion_cfg.get("enabled", True)) else None
+
+    evaluator = ResponseEvaluator()
+    lesson_store = LessonStore(db)
+    optimizer = PromptOptimizer(brain, lesson_store)
+    self_improvement_agent = (
+        SelfImprovementAgent(brain, db, improve_cfg, evaluator, lesson_store, optimizer)
+        if bool(improve_cfg.get("enabled", True))
+        else None
+    )
+
+    reporter = ActivityReporter(db, notifier=notifier)
+    scheduler = TaskScheduler(db, registry, notifier, reporter=reporter, config=autonomy_cfg) if bool(autonomy_cfg.get("enabled", True)) else None
+    monitor = (
+        ProactiveMonitor(db, registry, notifier, shell_skill, reporter=reporter)
+        if bool(autonomy_cfg.get("enabled", True))
+        else None
+    )
+    autonomous_agent = (
+        AutonomousAgent(brain, db, autonomy_cfg, scheduler, monitor, reporter)
+        if bool(autonomy_cfg.get("enabled", True)) and scheduler is not None and monitor is not None
+        else None
+    )
+
+    registry.emotion_agent = emotion_agent
+    registry.self_improvement_agent = self_improvement_agent
+    registry.lesson_store = lesson_store
+    registry.prompt_optimizer = optimizer
+    registry.autonomous_agent = autonomous_agent
+    registry.autonomy_reporter = reporter
+    # #region agent log
+    _debug_log(
+        "main.py:agent_init",
+        "self-aware systems initialized",
+        {
+            "emotion_enabled": emotion_agent is not None,
+            "self_improvement_enabled": self_improvement_agent is not None,
+            "autonomy_enabled": autonomous_agent is not None,
+            "scheduler_enabled": scheduler is not None,
+            "monitor_enabled": monitor is not None,
+        },
+        "run1",
+        "H3",
+    )
+    # #endregion
 
     orchestrator = None
     if agents_on:
@@ -318,6 +410,12 @@ def main() -> None:
             )
         if bool((config.get("notifications") or {}).get("enabled", True)):
             sub["notifier"] = notifier
+        if emotion_agent is not None:
+            sub["emotion"] = emotion_agent
+        if self_improvement_agent is not None:
+            sub["self_improvement"] = self_improvement_agent
+        if autonomous_agent is not None:
+            sub["autonomous"] = autonomous_agent
         orch_cfg = dict(agents_cfg.get("orchestrator") or {})
         orchestrator = Orchestrator(
             brain,
@@ -338,6 +436,18 @@ def main() -> None:
     _boot_console.print(
         f"[cyan]Agents active:[/cyan] {n_agents}  [cyan]Memories (DB):[/cyan] {mem_stored}",
     )
+    if emotion_agent is not None:
+        _boot_console.print(f"[cyan][EMOTION][/cyan] Mood tracking active — current mood: {mood.get_current_mood()}")
+    if self_improvement_agent is not None:
+        stats = self_improvement_agent.get_performance_stats()
+        lessons = len(lesson_store.get_top_failures(50))
+        _boot_console.print(
+            f"[cyan][IMPROVE][/cyan] Self-improvement active — avg score: {stats.get('avg_score_all_time')} | lessons: {lessons}",
+        )
+    if scheduler is not None:
+        _boot_console.print(f"[cyan][AUTONOMY][/cyan] Scheduler active — {len(scheduler.list_tasks())} tasks scheduled")
+    if monitor is not None:
+        _boot_console.print(f"[cyan][AUTONOMY][/cyan] Monitor active — {len(monitor.list_monitors())} conditions watching")
 
     listener, speaker, voice_cfg = _build_voice_hardware(config)
 
@@ -409,11 +519,39 @@ def main() -> None:
         except Exception as e:
             logger.exception("Could not start wake-word detector: %s", e)
 
+    if scheduler is not None:
+        scheduler.start()
+    if monitor is not None:
+        monitor.start()
+
+    try:
+        loaded_prompts = optimizer.load_optimized_prompts()
+        if loaded_prompts:
+            _boot_console.print("[cyan][IMPROVE][/cyan] Loaded optimized prompts from MongoDB")
+    except Exception:
+        pass
+
+    try:
+        if bool((autonomy_cfg or {}).get("morning_brief", True)):
+            now = __import__("datetime").datetime.now()
+            hhmm = str((autonomy_cfg or {}).get("brief_time", "08:00"))
+            h, m = [int(x) for x in hhmm.split(":")]
+            target = now.replace(hour=h, minute=m, second=0, microsecond=0)
+            delta = abs((now - target).total_seconds())
+            if delta <= 1800:
+                _boot_console.print(f"[cyan][AUTONOMY][/cyan] Morning brief: {reporter.generate_morning_brief()}")
+    except Exception:
+        pass
+
     try:
         cli.run()
     except KeyboardInterrupt:
         print("\nGoodbye, Sir.")
     finally:
+        if scheduler is not None:
+            scheduler.stop()
+        if monitor is not None:
+            monitor.stop()
         if web_iface is not None:
             try:
                 web_iface.stop()

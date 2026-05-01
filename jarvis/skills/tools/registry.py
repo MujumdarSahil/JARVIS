@@ -7,11 +7,29 @@ from __future__ import annotations
 import inspect
 import json
 import re
+import time
 from typing import Any
 
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def _debug_log(location: str, message: str, data: dict[str, Any], run_id: str, hypothesis_id: str) -> None:
+    try:
+        payload = {
+            "sessionId": "92b104",
+            "runId": run_id,
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": int(time.time() * 1000),
+        }
+        with open("debug-92b104.log", "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
 
 # FIXED: improved router system prompt with explicit JSON examples and tool list
 ROUTER_SYSTEM = """You are a tool router for JARVIS AI. Analyze the user's message and return ONLY a valid JSON object — no other text, no markdown, no explanation.
@@ -224,6 +242,12 @@ class ToolRegistry:
         skills_config: dict[str, Any] | None = None,
         smarthome_skill: Any | None = None,
         orchestrator: Any | None = None,
+        emotion_agent: Any | None = None,
+        self_improvement_agent: Any | None = None,
+        lesson_store: Any | None = None,
+        prompt_optimizer: Any | None = None,
+        autonomous_agent: Any | None = None,
+        autonomy_reporter: Any | None = None,
     ) -> None:
         self.brain = brain
         self.file_skill = file_skill
@@ -234,9 +258,19 @@ class ToolRegistry:
         self.search_skill = search_skill
         self.smarthome_skill = smarthome_skill
         self.orchestrator = orchestrator
+        self.emotion_agent = emotion_agent
+        self.self_improvement_agent = self_improvement_agent
+        self.lesson_store = lesson_store
+        self.prompt_optimizer = prompt_optimizer
+        self.autonomous_agent = autonomous_agent
+        self.autonomy_reporter = autonomy_reporter
+        self._call_counts: dict[str, int] = {}
         self._skills_config_override: dict[str, Any] | None = (
             dict(skills_config) if isinstance(skills_config, dict) else None
         )
+
+    def get_call_counts(self) -> dict[str, int]:
+        return self._call_counts
 
     def _skills_map(self) -> dict[str, Any]:
         if self._skills_config_override is not None:
@@ -400,6 +434,80 @@ class ToolRegistry:
         On failure, use the legacy tool router (LLM JSON + skills).
         """
         msg_lower = (user_message or "").lower().strip()
+        started = time.perf_counter()
+        # #region agent log
+        _debug_log(
+            "skills/tools/registry.py:route_entry",
+            "route called",
+            {"msg_lower": msg_lower[:120], "has_autonomous": self.autonomous_agent is not None, "has_emotion": self.emotion_agent is not None},
+            "run1",
+            "H1",
+        )
+        # #endregion
+
+        # Slash command handling for autonomy/self-improvement.
+        if msg_lower.startswith("/schedule ") and self.autonomous_agent is not None:
+            body = user_message[len("/schedule ") :].strip()
+            parsed = self.autonomous_agent.parse_natural_language_schedule(body)
+            out = self.autonomous_agent.execute(
+                {"action": "schedule", "params": {"name": body[:40] or "scheduled_task", "task_action": "direct", "params": {"text": body}, "schedule": parsed.get("schedule_str")}}
+            )
+            txt = f"Scheduled task created: {out.get('result')}"
+            # #region agent log
+            _debug_log(
+                "skills/tools/registry.py:schedule_branch",
+                "schedule branch completed",
+                {"body": body[:120], "result": str(out)[:220]},
+                "run1",
+                "H3",
+            )
+            # #endregion
+            return {"tool_used": "autonomous", "action": "schedule", "raw_result": out, "final_response": txt, "response": txt}
+        if msg_lower.startswith("/monitor ") and self.autonomous_agent is not None:
+            if msg_lower.strip() == "/monitor list":
+                out = self.autonomous_agent.execute({"action": "list_monitors", "params": {}})
+                txt = _tool_preview(out.get("result"))
+                return {"tool_used": "autonomous", "action": "list_monitors", "raw_result": out, "final_response": txt, "response": txt}
+            body = user_message[len("/monitor ") :].strip()
+            parsed = self.autonomous_agent.parse_natural_language_condition(body)
+            out = self.autonomous_agent.execute({"action": "monitor", "params": {"name": body[:40] or "monitor", **parsed}})
+            txt = f"Monitor created: {out.get('result')}"
+            return {"tool_used": "autonomous", "action": "monitor", "raw_result": out, "final_response": txt, "response": txt}
+        if msg_lower == "/tasks" and self.autonomous_agent is not None:
+            out = self.autonomous_agent.execute({"action": "list_tasks", "params": {}})
+            txt = _tool_preview(out.get("result"))
+            return {"tool_used": "autonomous", "action": "list_tasks", "raw_result": out, "final_response": txt, "response": txt}
+        if msg_lower == "/daily" and self.autonomy_reporter is not None:
+            txt = self.autonomy_reporter.get_daily_summary()
+            return {"tool_used": "autonomous", "action": "daily_summary", "raw_result": {"summary": txt}, "final_response": txt, "response": txt}
+        if msg_lower == "/brief" and self.autonomy_reporter is not None:
+            txt = self.autonomy_reporter.generate_morning_brief()
+            return {"tool_used": "autonomous", "action": "morning_brief", "raw_result": {"brief": txt}, "final_response": txt, "response": txt}
+        if msg_lower == "/performance" and self.self_improvement_agent is not None:
+            out = self.self_improvement_agent.get_performance_stats()
+            txt = _tool_preview(out)
+            return {"tool_used": "self_improvement", "action": "performance", "raw_result": out, "final_response": txt, "response": txt}
+        if msg_lower in ("/mood", "show current mood") and self.emotion_agent is not None:
+            out = self.emotion_agent.execute({"action": "get_mood", "params": {}})
+            txt = _tool_preview(out.get("result"))
+            return {"tool_used": "emotion", "action": "get_mood", "raw_result": out, "final_response": txt, "response": txt}
+
+        emotion_info: dict[str, Any] = {}
+        if self.emotion_agent is not None:
+            try:
+                logger.debug(f"[DEBUG EMOTION] Processing: {user_message[:50]}")
+                emotion_info = self.emotion_agent.process_message(user_message)
+            except Exception as e:
+                logger.debug("emotion processing failed: %s", e)
+                # #region agent log
+                _debug_log(
+                    "skills/tools/registry.py:emotion_exception",
+                    "emotion processing failed",
+                    {"error": str(e)[:220]},
+                    "run1",
+                    "H4",
+                )
+                # #endregion
 
         greet_starts = (
             "hello",
@@ -487,7 +595,33 @@ class ToolRegistry:
             except Exception as e:
                 logger.warning("Orchestrator routing failed; falling back to skills: %s", e)
 
-        return self._route_legacy(user_message, conversation_history)
+        out = self._route_legacy(user_message, conversation_history)
+        mood = str(emotion_info.get("mood") or "neutral")
+        if self.emotion_agent is not None and mood != "neutral":
+            greet = self.emotion_agent.tone_adapter.get_greeting_style(mood)
+            if greet:
+                out["final_response"] = f"{greet} {out.get('final_response','')}".strip()
+                out["response"] = out["final_response"]
+        if self.self_improvement_agent is not None:
+            duration_ms = int((time.perf_counter() - started) * 1000)
+            self.self_improvement_agent.post_response_hook_async(
+                user_message,
+                str(out.get("final_response") or ""),
+                str(out.get("tool_used") or ""),
+                duration_ms,
+            )
+            # #region agent log
+            _debug_log(
+                "skills/tools/registry.py:post_hook_async",
+                "post response hook queued",
+                {"tool_used": str(out.get("tool_used")), "duration_ms": duration_ms},
+                "run1",
+                "H2",
+            )
+            # #endregion
+        if out.get("tool_used"):
+            self._call_counts[out["tool_used"]] = self._call_counts.get(out["tool_used"], 0) + 1
+        return out
 
     def _route_legacy(self, user_message: str, conversation_history: list[dict[str, str]]) -> dict[str, Any]:
         """
@@ -536,8 +670,12 @@ class ToolRegistry:
 
             tools_txt = self.get_tools_description()
             hist_txt = _format_history_snippet(conversation_history)
+            recent_failures = self.lesson_store.get_relevant_lessons(user_message, limit=3) if self.lesson_store is not None else []
+            router_system = ROUTER_SYSTEM
+            if self.prompt_optimizer is not None:
+                router_system = self.prompt_optimizer.optimize_routing_prompt(router_system, recent_failures)
             router_messages: list[dict[str, str]] = [
-                {"role": "system", "content": f"{ROUTER_SYSTEM}\n\n{tools_txt}"},
+                {"role": "system", "content": f"{router_system}\n\n{tools_txt}"},
                 {
                     "role": "user",
                     "content": (

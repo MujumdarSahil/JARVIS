@@ -209,6 +209,20 @@ body::after {
   box-shadow: 0 0 10px rgba(255, 51, 85, 0.6);
 }
 
+.mood-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #666;
+}
+.mood-dot.neutral { background: #9aa4af; }
+.mood-dot.engaged { background: #00d4ff; }
+.mood-dot.frustrated { background: #ff5a5a; }
+.mood-dot.excited { background: #ffd166; }
+.mood-dot.impatient { background: #ff8800; }
+.mood-dot.confused { background: #b388ff; }
+.mood-dot.satisfied { background: #00c853; }
+
 .clock {
   font-variant-numeric: tabular-nums;
   color: var(--cyan);

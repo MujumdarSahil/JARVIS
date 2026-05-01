@@ -448,47 +448,153 @@ def create_api_blueprint(web: "WebInterface") -> Blueprint:
         except Exception as e:
             return _error(str(e), 500)
 
-    @bp.route("/sessions", methods=["GET"])
-    def api_sessions_list():
-        try:
-            return jsonify({"sessions": web.memory.get_sessions()})
-        except Exception as e:
-            return _error(str(e), 500)
-
-    @bp.route("/sessions/<sid>/load", methods=["POST"])
-    def api_sessions_load(sid: str):
-        try:
-            ok = web.memory.load_from_db(sid)
-            if not ok:
-                return _error("Session not found or DB unavailable", 404)
-            return jsonify({"ok": True, "session_id": web.memory.session_id})
-        except Exception as e:
-            return _error(str(e), 500)
-
-    @bp.route("/stats", methods=["GET"])
-    def api_stats():
+    @bp.route("/stats/conversations", methods=["GET"])
+    def api_stats_conversations():
         try:
             orch = getattr(web.registry, "orchestrator", None)
             n_agents = (len(getattr(orch, "_agents", {}) or {}) + 1) if orch else 0
             tc = tm = 0
+            avg_res = 0.0
+            most_tool = "none"
+            total_msgs = 0
             if db.available:
-                col = db.get_collection("conversations")
-                if col is not None:
-                    try:
+                try:
+                    col = db.get_collection("conversations")
+                    if col is not None:
                         tc = len(col.distinct("session_id"))
-                    except Exception:
-                        tc = db.count("conversations", {})
-                tm = db.count("memories", {})
+                        total_msgs = db.count("conversations", {})
+                    tm = db.count("memories", {})
+                    logs = db.find("agent_logs", {}, limit=1000)
+                    if logs:
+                        durs = [l.get("duration_ms", 0) for l in logs if l.get("duration_ms")]
+                        if durs:
+                            avg_res = sum(durs) / len(durs)
+                        tools = [l.get("tool_used") for l in logs if l.get("tool_used")]
+                        if tools:
+                            from collections import Counter
+                            most_tool = Counter(tools).most_common(1)[0][0]
+                except Exception:
+                    pass
             uptime_s = int(time.perf_counter() - web._started_at)
-            return jsonify(
-                {
-                    "total_conversations": tc,
-                    "total_memories": tm,
-                    "agents_available": n_agents,
-                    "db_status": "connected" if db.available else "unavailable",
-                    "uptime": uptime_s,
-                }
-            )
+            return jsonify({
+                "total_conversations": tc,
+                "total_messages": total_msgs,
+                "avg_response_time_ms": round(avg_res, 1),
+                "most_used_tool": most_tool,
+                "total_memories": tm,
+                "uptime": uptime_s
+            })
+        except Exception as e:
+            return _error(str(e), 500)
+
+    @bp.route("/stats/tools", methods=["GET"])
+    def api_stats_tools():
+        try:
+            counts = web.registry.get_call_counts()
+            if not counts and db.available:
+                try:
+                    logs = db.find("agent_logs", {}, limit=5000)
+                    from collections import Counter
+                    counts = Counter([l.get("tool_used") for l in logs if l.get("tool_used")])
+                except Exception:
+                    pass
+            if not counts: # fallback mock
+                counts = {"files": 0, "search": 0, "code": 0, "shell": 0, "smarthome": 0, "direct": 0}
+            return jsonify(counts)
+        except Exception as e:
+            return _error(str(e), 500)
+
+    @bp.route("/stats/response-times", methods=["GET"])
+    def api_stats_response_times():
+        try:
+            buckets = {"0-1s": 0, "1-3s": 0, "3-6s": 0, "6-10s": 0, "10s+": 0}
+            if db.available:
+                try:
+                    logs = db.find("agent_logs", {}, limit=2000)
+                    for l in logs:
+                        ms = l.get("duration_ms", 0)
+                        if ms < 1000: buckets["0-1s"] += 1
+                        elif ms < 3000: buckets["1-3s"] += 1
+                        elif ms < 6000: buckets["3-6s"] += 1
+                        elif ms < 10000: buckets["6-10s"] += 1
+                        else: buckets["10s+"] += 1
+                except Exception:
+                    pass
+            return jsonify(buckets)
+        except Exception as e:
+            return _error(str(e), 500)
+
+    @bp.route("/stats/agents", methods=["GET"])
+    def api_stats_agents():
+        try:
+            agents = {}
+            orch = getattr(web.registry, "orchestrator", None)
+            if orch:
+                agents["orchestrator"] = {"calls": getattr(orch, "tasks_completed", 0), "avg_duration": 0}
+                for name, agent in getattr(orch, "_agents", {}).items():
+                    agents[name] = {"calls": getattr(agent, "tasks_completed", 0), "avg_duration": 0}
+            return jsonify(agents)
+        except Exception as e:
+            return _error(str(e), 500)
+
+    @bp.route("/lessons", methods=["GET"])
+    def api_lessons():
+        try:
+            ls = getattr(web.registry, "lesson_store", None)
+            if ls:
+                lessons = ls.get_top_failures(10)
+                return jsonify([_scrub_mongo_doc(dict(l)) for l in lessons])
+            return jsonify([])
+        except Exception as e:
+            return _error(str(e), 500)
+
+    @bp.route("/schedule/<task_id>", methods=["PATCH"])
+    def api_schedule_patch(task_id: str):
+        try:
+            aa = getattr(web.registry, "autonomous_agent", None)
+            if aa is None: return _error("autonomy disabled", 400)
+            body = request.get_json(silent=True) or {}
+            enabled = body.get("enabled", True)
+            if enabled: aa.scheduler.resume_task(task_id)
+            else: aa.scheduler.pause_task(task_id)
+            return jsonify({"ok": True})
+        except Exception as e:
+            return _error(str(e), 500)
+
+    @bp.route("/schedule/<task_id>/run", methods=["POST"])
+    def api_schedule_run(task_id: str):
+        try:
+            aa = getattr(web.registry, "autonomous_agent", None)
+            if aa is None: return _error("autonomy disabled", 400)
+            res = aa.scheduler.run_task_now(task_id)
+            return jsonify(res)
+        except Exception as e:
+            return _error(str(e), 500)
+
+    @bp.route("/mood/history", methods=["GET"])
+    def api_mood_history():
+        try:
+            ea = getattr(web.registry, "emotion_agent", None)
+            if ea:
+                hist = ea.mood_tracker.get_mood_history(50)
+                return jsonify(hist)
+            return jsonify([])
+        except Exception as e:
+            return _error(str(e), 500)
+
+    @bp.route("/mood/sentiment-breakdown", methods=["GET"])
+    def api_mood_sentiment_breakdown():
+        try:
+            breakdown = {"positive": 0, "negative": 0, "neutral": 0, "frustrated": 0, "excited": 0, "confused": 0, "urgent": 0}
+            if db.available:
+                try:
+                    logs = db.find("emotion_logs", {}, limit=100)
+                    for l in logs:
+                        s = l.get("sentiment", {}).get("sentiment", "neutral")
+                        if s in breakdown: breakdown[s] += 1
+                except Exception:
+                    pass
+            return jsonify(breakdown)
         except Exception as e:
             return _error(str(e), 500)
 

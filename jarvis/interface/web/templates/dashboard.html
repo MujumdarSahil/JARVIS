@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JARVIS Analytics | Brain Status</title>
+    <link rel="manifest" href="/manifest.json">
+    <meta name="theme-color" content="#0a0a0f">
+    <link rel="stylesheet" href="/static/css/dashboard.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.5.3/socket.io.min.js"></script>
+</head>
+<body>
+    <header class="hud-header">
+        <div class="header-left">
+            <a href="/" class="btn-back"><span>&lt;</span> BACK TO CHAT</a>
+        </div>
+        <div class="header-center">
+            <h1>JARVIS ANALYTICS</h1>
+        </div>
+        <div class="header-right">
+            <div id="live-indicator">
+                <span class="dot"></span>
+                <span id="current-time">00:00:00</span>
+            </div>
+        </div>
+    </header>
+
+    <main class="dashboard-grid">
+        <!-- ZONE 1: SYSTEM HEALTH -->
+        <section class="zone zone-1" id="zone-system">
+            <div class="zone-header">
+                <h2>SYSTEM HEALTH</h2>
+                <div class="active-provider-badge" id="active-provider">GROQ</div>
+            </div>
+            <div class="zone-content">
+                <div class="rings-container">
+                    <div class="ring-box">
+                        <canvas id="cpu-ring" width="120" height="120"></canvas>
+                        <span>CPU</span>
+                    </div>
+                    <div class="ring-box">
+                        <canvas id="ram-ring" width="120" height="120"></canvas>
+                        <span>RAM</span>
+                    </div>
+                    <div class="ring-box">
+                        <canvas id="disk-ring" width="120" height="120"></canvas>
+                        <span>DISK</span>
+                    </div>
+                </div>
+                <div class="health-stats">
+                    <div class="stat-row">UPTIME: <span id="uptime-val">0s</span></div>
+                    <div class="stat-row">BATTERY: <span id="battery-val">N/A</span></div>
+                </div>
+            </div>
+            <div class="bracket top-left"></div><div class="bracket top-right"></div>
+            <div class="bracket bottom-left"></div><div class="bracket bottom-right"></div>
+        </section>
+
+        <!-- ZONE 2: AI BRAIN PERFORMANCE -->
+        <section class="zone zone-2" id="zone-brain">
+            <div class="zone-header">
+                <h2>AI BRAIN PERFORMANCE</h2>
+            </div>
+            <div class="zone-content">
+                <div class="chart-container">
+                    <canvas id="score-chart"></canvas>
+                </div>
+                <div class="stat-cards">
+                    <div class="stat-card">
+                        <label>Avg Score</label>
+                        <span id="avg-score">0.0</span>
+                    </div>
+                    <div class="stat-card">
+                        <label>Lessons</label>
+                        <span id="lesson-count">0</span>
+                    </div>
+                    <div class="stat-card">
+                        <label>Trend</label>
+                        <span id="improvement-trend" class="trend-stable"></span>
+                    </div>
+                </div>
+                <div class="lessons-list">
+                    <h3>RECENT LESSONS</h3>
+                    <div id="recent-lessons-container"></div>
+                </div>
+                <div class="agent-chart-container">
+                    <canvas id="agent-chart"></canvas>
+                </div>
+            </div>
+            <div class="bracket top-left"></div><div class="bracket top-right"></div>
+            <div class="bracket bottom-left"></div><div class="bracket bottom-right"></div>
+        </section>
+
+        <!-- ZONE 3: EMOTION & MOOD -->
+        <section class="zone zone-3" id="zone-emotion">
+            <div class="zone-header">
+                <h2>EMOTION & MOOD</h2>
+            </div>
+            <div class="zone-content">
+                <div class="mood-badge-container">
+                    <div id="current-mood-badge" class="mood-neutral">NEUTRAL</div>
+                </div>
+                <div class="mood-timeline-container">
+                    <label>Mood History</label>
+                    <div id="mood-timeline" class="mood-timeline"></div>
+                </div>
+                <div class="chart-container doughnut">
+                    <canvas id="sentiment-chart"></canvas>
+                </div>
+                <div class="satisfaction-meter">
+                    <label>User Satisfaction</label>
+                    <div class="progress-bar">
+                        <div id="satisfaction-fill" style="width: 0%"></div>
+                    </div>
+                    <span id="satisfaction-val">0%</span>
+                </div>
+            </div>
+            <div class="bracket top-left"></div><div class="bracket top-right"></div>
+            <div class="bracket bottom-left"></div><div class="bracket bottom-right"></div>
+        </section>
+
+        <!-- ZONE 4: ACTIVITY FEED -->
+        <section class="zone zone-4" id="zone-activity">
+            <div class="zone-header">
+                <h2>ACTIVITY FEED</h2>
+            </div>
+            <div class="zone-content">
+                <div id="activity-feed" class="feed-container"></div>
+                <div class="tasks-container">
+                    <h3>SCHEDULED TASKS</h3>
+                    <div class="table-wrapper">
+                        <table id="tasks-table">
+                            <thead>
+                                <tr>
+                                    <th>NAME</th>
+                                    <th>NEXT</th>
+                                    <th>ACTION</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="add-task-mini">
+                    <h3>QUICK ADD</h3>
+                    <form id="add-task-form">
+                        <input type="text" id="task-name" placeholder="Task name..." required>
+                        <input type="text" id="task-schedule" placeholder="Every day at 08:00" required>
+                        <select id="task-action">
+                            <option value="brief">Morning Brief</option>
+                            <option value="reflect">Weekly Reflection</option>
+                            <option value="cleanup_memories">Memory Cleanup</option>
+                        </select>
+                        <button type="submit">ADD</button>
+                    </form>
+                </div>
+            </div>
+            <div class="bracket top-left"></div><div class="bracket top-right"></div>
+            <div class="bracket bottom-left"></div><div class="bracket bottom-right"></div>
+        </section>
+
+        <!-- ZONE 5: CONVERSATION INSIGHTS -->
+        <section class="zone zone-5" id="zone-insights">
+            <div class="zone-header">
+                <h2>CONVERSATION INSIGHTS</h2>
+            </div>
+            <div class="zone-content">
+                <div class="insight-stats">
+                    <div class="stat-item"><label>Conversations</label><span id="total-sessions">0</span></div>
+                    <div class="stat-item"><label>Messages</label><span id="total-messages">0</span></div>
+                    <div class="stat-item"><label>Avg Response</label><span id="avg-response">0ms</span></div>
+                    <div class="stat-item"><label>Top Tool</label><span id="top-tool">NONE</span></div>
+                    <div class="stat-item"><label>Memories</label><span id="total-memories">0</span></div>
+                </div>
+                <div class="insights-row">
+                    <div class="insight-chart">
+                        <label>TOOL USAGE</label>
+                        <canvas id="tools-chart"></canvas>
+                    </div>
+                    <div class="insight-chart">
+                        <label>RESPONSE TIME DISTRIBUTION</label>
+                        <canvas id="response-time-chart"></canvas>
+                    </div>
+                </div>
+                <div class="sessions-table-container">
+                    <h3>RECENT SESSIONS</h3>
+                    <div class="table-wrapper">
+                        <table id="sessions-table">
+                            <thead>
+                                <tr>
+                                    <th>START TIME</th>
+                                    <th>MSGS</th>
+                                    <th>MOOD</th>
+                                    <th>ACTION</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            <div class="bracket top-left"></div><div class="bracket top-right"></div>
+            <div class="bracket bottom-left"></div><div class="bracket bottom-right"></div>
+        </section>
+    </main>
+
+    <script src="/static/js/dashboard.js"></script>
+</body>
+</html>

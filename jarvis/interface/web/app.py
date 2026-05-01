@@ -66,6 +66,7 @@ class WebInterface:
         self._smarthome_thread: threading.Thread | None = None
         self._stop_smarthome = threading.Event()
         self._last_device_sig: str | None = None
+        self._last_mood: str = "neutral"
 
         sh = self.config.get("smarthome") or {}
         self._smarthome_enabled = bool(isinstance(sh, dict) and sh.get("enabled"))
@@ -106,6 +107,10 @@ class WebInterface:
                 smarthome_ha_ready=self._smarthome_ha_ready,
             )
 
+        @self.app.route("/dashboard")
+        def dashboard():
+            return render_template("dashboard.html", version=_JARVIS_VERSION)
+
         @self.app.route("/sw.js")
         def service_worker():
             web_dir = _WEB_ROOT
@@ -120,6 +125,14 @@ class WebInterface:
 
     def _build_llm_messages(self) -> list[dict[str, str]]:
         system = self.context.get_system_prompt()
+        ea = getattr(self.registry, "emotion_agent", None)
+        if ea is not None:
+            try:
+                hist = self.memory.get_history()
+                latest_user = next((m.get("content", "") for m in reversed(hist) if m.get("role") == "user"), "")
+                system = self.context.get_enhanced_prompt(latest_user, ea)
+            except Exception:
+                pass
         return [{"role": "system", "content": system}, *self.memory.get_history()]
 
     def parse_system_info(self) -> dict[str, Any]:
@@ -198,6 +211,7 @@ class WebInterface:
 
     def process_chat_message(self, user_line: str) -> tuple[str, str, str]:
         """Run router + brain, update memory. Returns (reply, tool_used, provider_name)."""
+        start = time.perf_counter()
         self.memory.add("user", user_line)
         messages = self._build_llm_messages()
         try:
@@ -208,15 +222,43 @@ class WebInterface:
             if not reply:
                 reply = (self.brain.chat(messages) or "").strip()
             self.memory.add("assistant", reply)
+            try:
+                ea = getattr(self.registry, "emotion_agent", None)
+                if ea is not None:
+                    mood = ea.mood_tracker.get_current_mood()
+                    if mood != self._last_mood:
+                        self._last_mood = mood
+                        self.socketio.emit("mood_update", {"mood": mood, "sentiment": "", "timestamp": time.time()})
+            except Exception:
+                pass
         except Exception as e:
             logger.exception("Web chat route failed: %s", e)
             self.memory.drop_last()
             raise
+        duration_ms = int((time.perf_counter() - start) * 1000)
         prov = self.brain.get_active_provider()
         tool_label = tool_used
         if action and action not in ("none", "brain.chat"):
             tool_label = f"{tool_used}.{action}" if tool_used else action
-        return reply, tool_label, prov
+        return reply, tool_label, prov, duration_ms
+
+    def _performance_broadcaster_loop(self) -> None:
+        while not self._stop_stats.wait(timeout=300.0):
+            try:
+                sia = getattr(self.registry, "self_improvement_agent", None)
+                if sia is None:
+                    continue
+                stats = sia.get_performance_stats()
+                self.socketio.emit(
+                    "performance_update",
+                    {
+                        "avg_score": stats.get("avg_score_all_time"),
+                        "trend": stats.get("improvement_trend"),
+                        "total_evaluated": stats.get("total_evaluated"),
+                    },
+                )
+            except Exception as e:
+                logger.debug("performance broadcast failed: %s", e)
 
     def _maybe_speak_web(self, text: str) -> None:
         if not self._web_voice_output_enabled or not self.speaker:
@@ -267,7 +309,7 @@ class WebInterface:
                         to=request.sid,
                     )
                     return
-                reply, tool_used, _prov = self.process_chat_message(message)
+                reply, tool_used, _prov, duration_ms = self.process_chat_message(message)
                 action = tool_used.split(".", 1)[-1] if "." in tool_used else ""
                 self.socketio.emit(
                     "jarvis_response",
@@ -276,6 +318,7 @@ class WebInterface:
                         "tool_used": tool_used,
                         "action": action,
                         "session_id": session_id,
+                        "duration_ms": duration_ms,
                     },
                     to=request.sid,
                 )
@@ -504,6 +547,7 @@ class WebInterface:
             daemon=True,
         )
         self._stats_thread.start()
+        threading.Thread(target=self._performance_broadcaster_loop, name="jarvis-web-performance", daemon=True).start()
 
         if self._smarthome_enabled and self.device_manager is not None:
             self._smarthome_thread = threading.Thread(

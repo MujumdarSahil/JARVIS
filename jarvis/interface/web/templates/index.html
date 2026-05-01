@@ -27,8 +27,11 @@
       }
     </style>
   </head>
-  <body>
-    <div id="banner-lost" class="banner-lost">Connection lost, reconnecting…</div>
+  <body
+    data-voice-enabled="{{ voice_config_enabled | tojson }}"
+    data-smarthome-enabled="{{ smarthome_enabled | tojson }}"
+    data-smarthome-ready="{{ smarthome_ha_ready | tojson }}"
+  >    <div id="banner-lost" class="banner-lost">Connection lost, reconnecting…</div>
 
     <div class="app-wrap">
       <header class="hud-header panel">
@@ -56,9 +59,11 @@
         <div class="header-right">
           <div class="status-cluster">
             <span id="conn-dot" class="conn-dot bad" title="Socket"></span>
+            <span id="mood-dot" class="mood-dot neutral" title="Mood"></span>
             <span id="clock" class="clock">--:--:--</span>
             <span id="header-provider" class="provider-pill">—</span>
           </div>
+          <button type="button" class="btn" onclick="location.href='/dashboard'" title="Analytics">📊 ANALYTICS</button>
           <button type="button" class="btn drawer-toggle" id="toggle-left">◀ SYS</button>
           <button type="button" class="btn" id="toggle-smarthome" title="Smart Home">🏠</button>
           <button type="button" class="btn drawer-toggle" id="toggle-right">ACT ▶</button>
@@ -206,20 +211,25 @@
       (function () {
         if (typeof io === "undefined") {
           console.error("[JARVIS] Socket.IO client failed to load from CDN.");
-          document.getElementById("banner-lost").textContent =
-            "Socket.IO script failed to load. Check network or CDN.";
-          document.getElementById("banner-lost").classList.add("show");
+          var banner = document.getElementById("banner-lost");
+          if (banner) {
+            banner.textContent = "Socket.IO script failed to load. Check network or CDN.";
+            banner.classList.add("show");
+          }
           return;
         }
+
+        // Use data attributes to avoid breaking IDE JS parsing with Jinja2 tags
+        var config = document.body.dataset;
+        var ui = new JarvisUI({
+          voiceConfigEnabled: config.voiceEnabled === "true",
+          smarthomeEnabled: config.smarthomeEnabled === "true",
+          smarthomeHaReady: config.smarthomeReady === "true"
+        });
+        window.jarvisUI = ui;
+
         document.addEventListener("DOMContentLoaded", function () {
-          var voiceOn = {{ voice_config_enabled | tojson }};
-          var ui = new JarvisUI({
-            voiceConfigEnabled: voiceOn,
-            smarthomeEnabled: {{ smarthome_enabled | tojson }},
-            smarthomeHaReady: {{ smarthome_ha_ready | tojson }},
-          });
           ui.init();
-          window.jarvisUI = ui;
         });
       })();
     </script>
