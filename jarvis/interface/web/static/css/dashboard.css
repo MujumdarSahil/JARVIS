@@ -95,6 +95,10 @@ body {
     grid-column: 1 / -1;
 }
 
+.zone-6 {
+    grid-column: 1 / -1;
+}
+
 /* ZONE STYLES */
 .zone {
     background: var(--panel);
@@ -437,6 +441,37 @@ td {
     cursor: pointer;
     border-radius: 2px;
 }
+
+.identity-learning-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+}
+
+.identity-card, .relationship-card {
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(0, 212, 255, 0.15);
+    border-radius: 8px;
+    padding: 14px;
+}
+
+.badge-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 8px 0 12px;
+}
+
+.badge {
+    font-size: 11px;
+    padding: 3px 8px;
+    border-radius: 12px;
+    border: 1px solid rgba(255,255,255,0.2);
+}
+
+.badge.good { border-color: var(--green); color: var(--green); }
+.badge.warn { border-color: var(--yellow); color: var(--yellow); }
+.badge.bad { border-color: var(--red); color: var(--red); }
 
 /* RESPONSIVE */
 @media (max-width: 1400px) {

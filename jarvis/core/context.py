@@ -13,9 +13,19 @@ from typing import Any
 class Context:
     """Assembles the system prompt Jarvis uses for each conversation turn."""
 
-    def __init__(self, config: dict[str, Any], base_dir: Path | None = None) -> None:
+    def __init__(
+        self,
+        config: dict[str, Any],
+        base_dir: Path | None = None,
+        personal_kb: Any = None,
+        jarvis_self: Any = None,
+        relationship: Any = None,
+    ) -> None:
         self._config = config
         self._base_dir = base_dir if base_dir is not None else Path.cwd()
+        self._personal_kb = personal_kb
+        self._jarvis_self = jarvis_self
+        self._relationship = relationship
 
     def get_system_prompt(self, emotion_addon: str = "") -> str:
         """
@@ -65,6 +75,43 @@ class Context:
             "asterisks, or code fences) unless the user explicitly asks for Markdown or code blocks."
             + footer
         )
+        # Inject personal KB context (≤200 words) after persona section
+        if self._personal_kb is not None:
+            try:
+                ctx_summary = self._personal_kb.get_context_summary()
+                if ctx_summary:
+                    personal_section = (
+                        "\n\nPERSONAL CONTEXT ABOUT THE USER:\n"
+                        f"{ctx_summary}\n"
+                        "Use this to personalize responses. Address user by name if known."
+                    )
+                    base = base + personal_section
+            except Exception:
+                pass
+
+        if self._jarvis_self is not None:
+            try:
+                identity_section = (
+                    "\n\nYOUR SELF-MODEL:\n"
+                    f"{self._jarvis_self.get_self_description()}"
+                )
+                base = base + identity_section
+            except Exception:
+                pass
+
+        if self._relationship is not None:
+            try:
+                comm_style = self._relationship.relationship_data.get("user_communication_style", "unknown")
+                rel_section = (
+                    "\n\nRELATIONSHIP CONTEXT:\n"
+                    f"{self._relationship.get_relationship_summary()}\n"
+                    f"Rapport level: {self._relationship.get_rapport_level()}\n"
+                    f"Communication style preference: {comm_style}"
+                )
+                base = base + rel_section
+            except Exception:
+                pass
+
         if (emotion_addon or "").strip():
             return f"{base}\n\n{emotion_addon.strip()}"
         return base

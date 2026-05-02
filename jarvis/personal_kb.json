@@ -1,0 +1,12 @@
+[
+  {
+    "category": "goals",
+    "data": {
+      "goal": "my goal is to learn machine learning this year",
+      "deadline": "unspecified",
+      "progress_pct": 0,
+      "status": "active"
+    },
+    "timestamp": 1777737734.059048
+  }
+]

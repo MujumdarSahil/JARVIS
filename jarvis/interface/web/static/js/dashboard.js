@@ -70,7 +70,7 @@ class JarvisDashboard {
 
     async loadAllData() {
         try {
-            const [convs, tools, resTimes, agents, lessons, tasks, moodHist, sentiment] = await Promise.all([
+            const [convs, tools, resTimes, agents, lessons, tasks, moodHist, sentiment, identity, relationship, trajectory] = await Promise.all([
                 fetch('/api/stats/conversations').then(r => r.json()),
                 fetch('/api/stats/tools').then(r => r.json()),
                 fetch('/api/stats/response-times').then(r => r.json()),
@@ -78,7 +78,10 @@ class JarvisDashboard {
                 fetch('/api/lessons').then(r => r.json()),
                 fetch('/api/schedule').then(r => r.json()),
                 fetch('/api/mood/history').then(r => r.json()),
-                fetch('/api/mood/sentiment-breakdown').then(r => r.json())
+                fetch('/api/mood/sentiment-breakdown').then(r => r.json()),
+                fetch('/api/identity').then(r => r.json()),
+                fetch('/api/relationship').then(r => r.json()),
+                fetch('/api/trajectory').then(r => r.json())
             ]);
 
             this.renderInsights(convs);
@@ -89,6 +92,9 @@ class JarvisDashboard {
             this.renderTasksTable(tasks.tasks || []);
             this.renderMoodTimeline(moodHist);
             this.renderSentimentDoughnut(sentiment);
+            this.renderIdentity(identity.identity || {});
+            this.renderRelationship(relationship.relationship || {}, relationship.summary || "");
+            this.renderTrajectory((trajectory.trajectory || {}).weeks || [], (trajectory.trajectory || {}).scores || []);
             
             // Mock score data for initial load if none exists
             this.renderScoreChart([7, 8, 7, 9, 8, 7, 8, 9, 10, 9]);
@@ -456,6 +462,49 @@ class JarvisDashboard {
                 <td><button class="btn-load" onclick="dashboard.loadSession('${s.session_id}')">LOAD</button></td>
             `;
             tbody.appendChild(tr);
+        });
+    }
+
+    renderBadgeRow(id, items, cls) {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.innerHTML = (items || []).map(i => `<span class="badge ${cls}">${i}</span>`).join('') || '<span class="badge">none</span>';
+    }
+
+    renderIdentity(identity) {
+        const core = document.getElementById('identity-core');
+        if (core) {
+            core.innerHTML = `${identity.name || 'JARVIS'} v${identity.version || '1.0.0'}<br>Days active: ${identity.relationship_duration_days || 0}<br>Total conversations: ${identity.total_conversations || 0}`;
+        }
+        document.getElementById('identity-focus').textContent = identity.current_focus || 'Improving overall reliability';
+        document.getElementById('identity-proudest').textContent = identity.proudest_achievement || 'No major achievement logged yet.';
+        this.renderBadgeRow('skills-mastered', identity.skills_mastered || [], 'good');
+        this.renderBadgeRow('skills-improving', identity.skills_improving || [], 'warn');
+        this.renderBadgeRow('skills-struggling', identity.skills_struggling || [], 'bad');
+        this.renderBadgeRow('identity-traits', identity.personality_traits || [], '');
+    }
+
+    renderRelationship(rel, summary) {
+        document.getElementById('relationship-summary').textContent = summary || 'Relationship data not available.';
+        document.getElementById('trust-score').textContent = rel.trust_score || 0;
+        document.getElementById('rapport-level').textContent = rel.rapport_level || 'new';
+        document.getElementById('comm-style').textContent = rel.user_communication_style || 'unknown';
+        document.getElementById('streak-days').textContent = rel.streak_days || 0;
+        const row = document.getElementById('milestones-row');
+        if (row) {
+            row.innerHTML = (rel.milestones_hit || []).map(m => `🏆 ${m}`).join('  ') || 'No milestones yet';
+        }
+    }
+
+    renderTrajectory(weeks, scores) {
+        const canvas = document.getElementById('trajectory-chart');
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        if (this.charts.trajectory) this.charts.trajectory.destroy();
+        this.charts.trajectory = new Chart(ctx, {
+            type: 'line',
+            data: { labels: weeks, datasets: [{ data: scores, borderColor: this.colors.green, tension: 0.3 }] },
+            options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } }
         });
     }
 

@@ -40,6 +40,11 @@ class WebInterface:
         device_manager: Any = None,
         routine_manager: Any = None,
         notifier: Any = None,
+        suggestion_engine: Any = None,
+        jarvis_self: Any = None,
+        relationship: Any = None,
+        pattern_engine: Any = None,
+        weekly_learner: Any = None,
     ) -> None:
         self.brain = brain
         self.memory = memory
@@ -51,6 +56,11 @@ class WebInterface:
         self.device_manager = device_manager
         self.routine_manager = routine_manager
         self.notifier = notifier
+        self.suggestion_engine = suggestion_engine
+        self.jarvis_self = jarvis_self
+        self.relationship = relationship
+        self.pattern_engine = pattern_engine
+        self.weekly_learner = weekly_learner
         if self.context is None:
             base = _WEB_ROOT.parent.parent
             self.context = Context(self.config, base_dir=base)
@@ -323,6 +333,17 @@ class WebInterface:
                     to=request.sid,
                 )
                 self._maybe_speak_web(reply)
+                if self.suggestion_engine is not None:
+                    suggestions = self.suggestion_engine.get_suggestions({})
+                    if suggestions:
+                        s = suggestions[0]
+                        if self.suggestion_engine.should_surface_suggestion(s):
+                            self.suggestion_engine.mark_shown(s)
+                            self.socketio.emit(
+                                "proactive_suggestion",
+                                {"suggestion": self.suggestion_engine.format_suggestion_for_web([s])[0]},
+                                to=request.sid,
+                            )
                 if self.notifier is not None and bool((self.config.get("notifications") or {}).get("web_push", True)):
                     low = reply.lower()
                     urgency_words = ("error", "failed", "complete", "done", "finished")

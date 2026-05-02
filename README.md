@@ -19,6 +19,8 @@ Repository: [github.com/MujumdarSahil/JARVIS](https://github.com/MujumdarSahil/J
 | **System** | File ops, shell commands, clipboard, app launcher (aliases in config). |
 | **Smart home** (optional) | Home Assistant REST client, MQTT, natural-language device control, routines, web API + live updates. |
 | **Voice** (optional) | Faster-Whisper STT, Edge TTS / pyttsx3, optional Porcupine wake word. |
+| **Learning layer** | Usage analytics, recurring pattern discovery, proactive suggestions, weekly self-study reports. |
+| **Identity layer** | Jarvis self-model, relationship tracking, trust/rapport milestones, personalized startup greetings. |
 
 ---
 
@@ -152,12 +154,36 @@ JARVIS/
     ├── config.example.yaml   # Template (safe to commit)
     ├── requirements.txt
     ├── core/                 # Brain, context, memory
+    │   ├── learning/         # Usage analyzer, patterns, suggestions, weekly learner
+    │   └── identity/         # Jarvis self-model and relationship tracker
     ├── interface/            # CLI + web (Flask / Socket.IO)
     ├── skills/               # Code, search, system, voice, smarthome, tools/registry
     └── utils/                # Logging
 ```
 
 Run all commands from **`jarvis/`** so imports resolve correctly.
+
+---
+
+## Intelligence Layer
+
+Jarvis now includes a final intelligence layer with:
+
+- `core/learning/usage_analyzer.py`: usage heatmaps, top requests, tool success rates, session patterns, user vocabulary.
+- `core/learning/pattern_engine.py`: time-based, sequence, preference, frustration, and success patterns (minimum 5 data points).
+- `core/learning/suggestion_engine.py`: proactive suggestions with strict anti-spam limits (max/session + cooldown).
+- `core/learning/weekly_learner.py`: weekly background self-study loop and long-term improvement trajectory.
+- `core/identity/jarvis_self.py`: Jarvis self-description, strengths/weaknesses, achievements, and time-aware greetings.
+- `core/identity/relationship.py`: trust score EMA, rapport level, communication style, streaks, milestones.
+
+### New CLI commands
+
+- `/me`, `/patterns`, `/suggestions`, `/weekly`, `/trajectory`, `/milestone`
+
+### New web/API capabilities
+
+- `/api/identity`, `/api/relationship`, `/api/patterns`, `/api/suggestions`, `/api/weekly-report`, `/api/trajectory`
+- Socket event `proactive_suggestion` for floating suggestion cards with accept/dismiss actions.
 
 ---
 

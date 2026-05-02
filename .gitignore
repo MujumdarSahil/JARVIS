@@ -1,6 +1,11 @@
 # Local secrets — never commit real keys
 jarvis/config.yaml
 
+# Phase 2 credentials — NEVER commit these
+jarvis/gmail_credentials.json
+jarvis/gmail_token.json
+jarvis/expenses.json
+
 # Runtime / local data
 jarvis/jarvis_memory.json
 jarvis/devices.json

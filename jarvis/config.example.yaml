@@ -148,3 +148,40 @@ apps:
     explorer: "explorer.exe"
     calculator: "calc.exe"
     spotify: "spotify.exe"
+
+plugins:
+  enabled: true
+  custom_dir: "plugins/custom"
+  builtin_dir: "plugins/builtin"
+  disabled: []
+
+telegram:
+  enabled: false
+  token: ""
+  allowed_user_ids: []
+  send_notifications: true
+
+api_server:
+  enabled: false
+  host: "0.0.0.0"
+  port: 8000
+  auth_token: ""
+  cors_origins: ["*"]
+
+webhooks:
+  enabled: false
+  secret: ""
+
+learning:
+  enabled: true
+  weekly_study: true
+  proactive_suggestions: true
+  max_suggestions_per_session: 2
+  suggestion_cooldown_minutes: 30
+  pattern_confidence_threshold: 0.7
+
+identity:
+  enabled: true
+  track_relationship: true
+  show_startup_greeting: true
+  milestone_notifications: true

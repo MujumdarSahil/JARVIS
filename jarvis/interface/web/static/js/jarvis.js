@@ -142,6 +142,11 @@
       var p = data || {};
       self.showToast("Autonomous action", (p.action || "task") + " via " + (p.trigger || "system"), "normal");
     });
+
+    this.socket.on("proactive_suggestion", function (data) {
+      var s = (data || {}).suggestion || null;
+      if (s) self.showSuggestionCard(s);
+    });
   };
 
   JarvisUI.prototype.bindDom = function () {
@@ -906,6 +911,38 @@
       .catch(function (e) {
         log("routine failed", e);
       });
+  };
+
+  JarvisUI.prototype.showSuggestionCard = function (s) {
+    var card = document.getElementById("jarvis-suggestion-card");
+    if (!card) {
+      card = document.createElement("div");
+      card.id = "jarvis-suggestion-card";
+      card.style.cssText = "position:fixed;right:12px;bottom:12px;z-index:9999;max-width:360px;background:#0f1720;border:1px solid #00d4ff;border-radius:10px;padding:12px;color:#e8f4ff;box-shadow:0 8px 20px rgba(0,0,0,.4)";
+      document.body.appendChild(card);
+    }
+    var self = this;
+    card.innerHTML =
+      "<div style='font-weight:700;margin-bottom:6px'>💡 Proactive suggestion</div>" +
+      "<div style='font-size:.92rem'>" + esc(s.text || s.suggestion || "") + "</div>" +
+      "<div style='margin-top:8px;display:flex;gap:8px'>" +
+      "<button id='sg-accept' class='btn btn-orange'>Accept</button>" +
+      "<button id='sg-dismiss' class='btn'>Dismiss</button></div>";
+    var id = s.id || s.suggestion_id || "";
+    var accept = card.querySelector("#sg-accept");
+    var dismiss = card.querySelector("#sg-dismiss");
+    if (accept) {
+      accept.addEventListener("click", function () {
+        fetch("/api/suggestions/" + encodeURIComponent(id) + "/accept", { method: "POST" });
+        card.remove();
+      });
+    }
+    if (dismiss) {
+      dismiss.addEventListener("click", function () {
+        fetch("/api/suggestions/" + encodeURIComponent(id) + "/dismiss", { method: "POST" });
+        card.remove();
+      });
+    }
   };
 
   window.JarvisUI = JarvisUI;

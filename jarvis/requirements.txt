@@ -29,3 +29,15 @@ Pillow>=10.0.0
 plyer>=2.1.0
 pygetwindow>=0.0.9
 pytesseract>=0.3.10
+
+# Real-world integrations (Phase 2)
+google-api-python-client>=2.100.0
+google-auth-oauthlib>=1.1.0
+google-auth-httplib2>=0.1.1
+playwright>=1.40.0
+PyGithub>=2.1.0
+yfinance>=0.2.30
+python-telegram-bot>=20.0
+fastapi>=0.104.0
+uvicorn>=0.24.0
+python-multipart>=0.0.6

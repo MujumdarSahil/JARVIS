@@ -598,6 +598,276 @@ def create_api_blueprint(web: "WebInterface") -> Blueprint:
         except Exception as e:
             return _error(str(e), 500)
 
+    # ─────────────────── Phase 2: Gmail / Calendar ────────────────────────
+    def _gmail_agent():
+        orch = getattr(web.registry, "orchestrator", None)
+        agents = getattr(orch, "_agents", {}) if orch else {}
+        return agents.get("gmail")
+
+    @bp.route("/gmail/inbox", methods=["GET"])
+    def api_gmail_inbox():
+        try:
+            agent = _gmail_agent()
+            if agent is None:
+                return jsonify({"configured": False, "emails": [], "message": "Gmail not enabled."})
+            result = agent.execute({"action": "read_inbox", "params": {"max_results": 20}})
+            return jsonify({"configured": True, "summary": result.get("result", ""), "emails": result.get("emails", [])})
+        except Exception as e:
+            return _error(str(e), 500)
+
+    @bp.route("/gmail/send", methods=["POST"])
+    def api_gmail_send():
+        try:
+            agent = _gmail_agent()
+            if agent is None:
+                return _error("Gmail not enabled.", 400)
+            body = request.get_json(silent=True) or {}
+            confirmed = bool(body.get("confirmed", False))
+            result = agent.execute({"action": "send_email", "params": {**body, "confirmed": confirmed}})
+            return jsonify(result)
+        except Exception as e:
+            return _error(str(e), 500)
+
+    @bp.route("/gmail/calendar", methods=["GET"])
+    def api_gmail_calendar():
+        try:
+            agent = _gmail_agent()
+            if agent is None:
+                return jsonify({"configured": False, "events": [], "message": "Gmail not enabled."})
+            days = int(request.args.get("days_ahead", 7))
+            result = agent.execute({"action": "get_calendar", "params": {"days_ahead": days}})
+            return jsonify({"configured": True, "summary": result.get("result", ""), "events": result.get("events", [])})
+        except Exception as e:
+            return _error(str(e), 500)
+
+    @bp.route("/gmail/event", methods=["POST"])
+    def api_gmail_event():
+        try:
+            agent = _gmail_agent()
+            if agent is None:
+                return _error("Gmail not enabled.", 400)
+            body = request.get_json(silent=True) or {}
+            result = agent.execute({"action": "create_event", "params": body})
+            return jsonify(result)
+        except Exception as e:
+            return _error(str(e), 500)
+
+    # ─────────────────── Phase 2: Finance ─────────────────────────────────
+    def _finance_agent():
+        orch = getattr(web.registry, "orchestrator", None)
+        agents = getattr(orch, "_agents", {}) if orch else {}
+        return agents.get("finance")
+
+    @bp.route("/finance/markets", methods=["GET"])
+    def api_finance_markets():
+        try:
+            agent = _finance_agent()
+            if agent is None:
+                return jsonify({"configured": False, "message": "Finance not enabled."})
+            result = agent.execute({"action": "market_summary", "params": {}})
+            return jsonify({"configured": True, "summary": result.get("result", ""), "data": result.get("data", {})})
+        except Exception as e:
+            return _error(str(e), 500)
+
+    @bp.route("/finance/expenses", methods=["GET"])
+    def api_finance_expenses_get():
+        try:
+            agent = _finance_agent()
+            if agent is None:
+                return jsonify({"configured": False, "message": "Finance not enabled."})
+            period = request.args.get("period", "this_month")
+            result = agent.execute({"action": "expense_summary", "params": {"period": period}})
+            return jsonify({"configured": True, "summary": result.get("result", ""), "data": result.get("data", {})})
+        except Exception as e:
+            return _error(str(e), 500)
+
+    @bp.route("/finance/expenses", methods=["POST"])
+    def api_finance_expenses_post():
+        try:
+            agent = _finance_agent()
+            if agent is None:
+                return _error("Finance not enabled.", 400)
+            body = request.get_json(silent=True) or {}
+            result = agent.execute({"action": "add_expense", "params": body})
+            return jsonify(result)
+        except Exception as e:
+            return _error(str(e), 500)
+
+    @bp.route("/finance/budget", methods=["GET"])
+    def api_finance_budget():
+        try:
+            agent = _finance_agent()
+            if agent is None:
+                return jsonify({"configured": False, "message": "Finance not enabled."})
+            result = agent.execute({"action": "budget_status", "params": {}})
+            return jsonify({"configured": True, "summary": result.get("result", ""), "data": result.get("data", {})})
+        except Exception as e:
+            return _error(str(e), 500)
+
+    # ─────────────────── Phase 2: GitHub ──────────────────────────────────
+    def _github_agent():
+        orch = getattr(web.registry, "orchestrator", None)
+        agents = getattr(orch, "_agents", {}) if orch else {}
+        return agents.get("github")
+
+    @bp.route("/github/repos", methods=["GET"])
+    def api_github_repos():
+        try:
+            agent = _github_agent()
+            if agent is None:
+                return jsonify({"configured": False, "repos": [], "message": "GitHub not enabled."})
+            result = agent.execute({"action": "list_repos", "params": {}})
+            return jsonify({"configured": True, "summary": result.get("result", ""), "repos": result.get("repos", [])})
+        except Exception as e:
+            return _error(str(e), 500)
+
+    @bp.route("/github/issues/<path:repo>", methods=["GET"])
+    def api_github_issues(repo: str):
+        try:
+            agent = _github_agent()
+            if agent is None:
+                return _error("GitHub not enabled.", 400)
+            result = agent.execute({"action": "list_issues", "params": {"repo": repo}})
+            return jsonify({"summary": result.get("result", ""), "issues": result.get("issues", [])})
+        except Exception as e:
+            return _error(str(e), 500)
+
+    # ─────────────────── Phase 2: Personal KB ─────────────────────────────
+    def _personal_kb():
+        ctx = getattr(web, "_context", None) or getattr(web, "context", None)
+        if ctx:
+            kb = getattr(ctx, "_personal_kb", None)
+            if kb:
+                return kb
+        orch = getattr(web.registry, "orchestrator", None)
+        agents = getattr(orch, "_agents", {}) if orch else {}
+        mem = agents.get("memory")
+        if mem:
+            return getattr(mem, "_personal_kb", None) or getattr(mem, "personal_kb", None)
+        return None
+
+    @bp.route("/kb/profile", methods=["GET"])
+    def api_kb_profile():
+        try:
+            kb = _personal_kb()
+            if kb is None:
+                return jsonify({"configured": False, "profile": {}, "message": "Personal KB not available."})
+            return jsonify({"configured": True, "profile": kb.get_full_profile()})
+        except Exception as e:
+            return _error(str(e), 500)
+
+    @bp.route("/kb/contact", methods=["POST"])
+    def api_kb_contact_post():
+        try:
+            kb = _personal_kb()
+            if kb is None:
+                return _error("Personal KB not available.", 400)
+            body = request.get_json(silent=True) or {}
+            result = kb.add_contact(
+                name=body.get("name", ""),
+                email=body.get("email"),
+                phone=body.get("phone"),
+                relationship=body.get("relationship", "contact"),
+                notes=body.get("notes", ""),
+            )
+            return jsonify(result)
+        except Exception as e:
+            return _error(str(e), 500)
+
+    @bp.route("/kb/contacts", methods=["GET"])
+    def api_kb_contacts():
+        try:
+            kb = _personal_kb()
+            if kb is None:
+                return jsonify({"configured": False, "contacts": []})
+            contacts = kb.get("contacts")
+            return jsonify({"configured": True, "contacts": contacts})
+        except Exception as e:
+            return _error(str(e), 500)
+
+    @bp.route("/identity", methods=["GET"])
+    def api_identity():
+        try:
+            js = getattr(web, "jarvis_self", None)
+            if js is None:
+                return jsonify({"configured": False, "identity": {}})
+            return jsonify({"configured": True, "identity": js.identity})
+        except Exception as e:
+            return _error(str(e), 500)
+
+    @bp.route("/relationship", methods=["GET"])
+    def api_relationship():
+        try:
+            rel = getattr(web, "relationship", None)
+            if rel is None:
+                return jsonify({"configured": False, "relationship": {}})
+            return jsonify({"configured": True, "relationship": rel.relationship_data, "summary": rel.get_relationship_summary()})
+        except Exception as e:
+            return _error(str(e), 500)
+
+    @bp.route("/patterns", methods=["GET"])
+    def api_patterns():
+        try:
+            pe = getattr(web, "pattern_engine", None)
+            if pe is None:
+                return jsonify({"configured": False, "patterns": []})
+            return jsonify({"configured": True, "patterns": pe.find_patterns(), "summary": pe.get_pattern_summary()})
+        except Exception as e:
+            return _error(str(e), 500)
+
+    @bp.route("/suggestions", methods=["GET"])
+    def api_suggestions():
+        try:
+            se = getattr(web, "suggestion_engine", None)
+            if se is None:
+                return jsonify({"configured": False, "suggestions": []})
+            sugs = se.get_suggestions({})
+            return jsonify({"configured": True, "suggestions": se.format_suggestion_for_web(sugs)})
+        except Exception as e:
+            return _error(str(e), 500)
+
+    @bp.route("/suggestions/<sid>/accept", methods=["POST"])
+    def api_suggestion_accept(sid: str):
+        try:
+            se = getattr(web, "suggestion_engine", None)
+            if se is None:
+                return _error("Suggestion engine unavailable", 400)
+            se.mark_accepted(sid)
+            return jsonify({"ok": True})
+        except Exception as e:
+            return _error(str(e), 500)
+
+    @bp.route("/suggestions/<sid>/dismiss", methods=["POST"])
+    def api_suggestion_dismiss(sid: str):
+        try:
+            se = getattr(web, "suggestion_engine", None)
+            if se is None:
+                return _error("Suggestion engine unavailable", 400)
+            se.mark_dismissed(sid)
+            return jsonify({"ok": True})
+        except Exception as e:
+            return _error(str(e), 500)
+
+    @bp.route("/weekly-report", methods=["GET"])
+    def api_weekly_report():
+        try:
+            wl = getattr(web, "weekly_learner", None)
+            if wl is None:
+                return jsonify({"configured": False, "report": {}})
+            return jsonify({"configured": True, "report": wl.get_weekly_report(0)})
+        except Exception as e:
+            return _error(str(e), 500)
+
+    @bp.route("/trajectory", methods=["GET"])
+    def api_trajectory():
+        try:
+            wl = getattr(web, "weekly_learner", None)
+            if wl is None:
+                return jsonify({"configured": False, "trajectory": {}})
+            return jsonify({"configured": True, "trajectory": wl.get_improvement_trajectory()})
+        except Exception as e:
+            return _error(str(e), 500)
+
     return bp
 
 

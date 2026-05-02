@@ -39,9 +39,14 @@ class Notifier:
         self._timer_refs: dict[str, threading.Timer] = {}
         self._scheduler_running = False
         self._toaster = ToastNotifier() if WIN10TOAST_AVAILABLE else None
+        self._channel_callbacks: list[Any] = []
 
     def set_socketio(self, socketio: Any) -> None:
         self.socketio = socketio
+
+    def register_channel_callback(self, callback: Any) -> None:
+        if callback is not None:
+            self._channel_callbacks.append(callback)
 
     def _log_notification(self, title: str, message: str, urgency: str) -> None:
         if self.db is None:
@@ -88,6 +93,11 @@ class Notifier:
                     pass
 
             self._log_notification(title, message, urgency)
+            for cb in list(self._channel_callbacks):
+                try:
+                    cb(f"{title}: {message}")
+                except Exception:
+                    pass
             return result
         except Exception as e:
             return {"success": False, "error": str(e)}

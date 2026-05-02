@@ -54,6 +54,31 @@ Available tools:
 - clipboard.read — read clipboard. No params needed.
 - clipboard.write — write to clipboard. Params: {text: str}
 - smarthome.control_device — control smart home device. Params: {command: str}
+- gmail.read_inbox — read unread emails. Params: {}
+- gmail.send_email — draft and send email (requires confirmation). Params: {to: str, subject: str, body: str}
+- gmail.get_calendar — upcoming calendar events. Params: {days_ahead: int}
+- gmail.create_event — create calendar event. Params: {title: str, start_datetime: str, end_datetime: str}
+- gmail.summarize_day — inbox + calendar daily summary. Params: {}
+- browser.browse — open and describe a webpage. Params: {url: str}
+- browser.search — Google search via browser. Params: {query: str}
+- browser.scrape — extract data from website. Params: {url: str}
+- browser.extract_price — get product price from URL. Params: {url: str}
+- browser.monitor_site — watch for website changes. Params: {url: str, selector: str}
+- github.list_repos — list GitHub repositories. Params: {}
+- github.list_issues — show repo issues. Params: {repo: str}
+- github.review_pr — AI code review of pull request. Params: {repo: str, pr_number: int}
+- github.check_ci — check CI/CD pipeline status. Params: {repo: str}
+- github.repo_summary — full repo overview. Params: {repo: str}
+- finance.market_summary — stock market overview. Params: {}
+- finance.stock_price — get stock price. Params: {symbol: str}
+- finance.crypto_price — get crypto price. Params: {coin: str}
+- finance.add_expense — log an expense. Params: {amount: float, category: str, description: str}
+- finance.expense_summary — spending summary. Params: {period: str}
+- finance.monthly_report — full financial report. Params: {}
+- kb.add_contact — save a contact. Params: {name: str, email: str}
+- kb.find_contact — look up a contact. Params: {name: str}
+- kb.update_goal — update a personal goal. Params: {goal: str, progress: int}
+- kb.get_profile — show personal profile. Params: {}
 - direct — answer from knowledge, no tool needed. Params: {}
 
 ROUTING EXAMPLES (learn these patterns):
@@ -76,12 +101,23 @@ ROUTING EXAMPLES (learn these patterns):
 "plan to become X" → {"tool":"direct","action":"direct","params":{}}
 "how do I learn X in N days" → {"tool":"direct","action":"direct","params":{}}
 "roadmap for X" → {"tool":"direct","action":"direct","params":{}}
+"check my email" → {"tool":"gmail","action":"read_inbox","params":{}}
+"what's on my calendar" → {"tool":"gmail","action":"get_calendar","params":{"days_ahead":7}}
+"what's the price of RELIANCE stock" → {"tool":"finance","action":"stock_price","params":{"symbol":"RELIANCE.NS"}}
+"bitcoin price" → {"tool":"finance","action":"crypto_price","params":{"coin":"bitcoin"}}
+"I spent 250 on lunch" → {"tool":"finance","action":"add_expense","params":{"amount":250,"category":"food","description":"lunch"}}
+"list my github repos" → {"tool":"github","action":"list_repos","params":{}}
+"open amazon" → {"tool":"browser","action":"browse","params":{"url":"https://www.amazon.in"}}
 
 RULES:
 - Use "direct" for greetings, math, general knowledge, opinions, anything that doesn't need a tool
 - Use "search" ONLY when the user needs current/live information (news, prices, scores, weather)
 - Use "code" only when the user wants programming source code (languages, functions, scripts, APIs) — not for life/career/learning plans (those are "direct")
 - Use "code" when user says "write", "create", "generate", "make" + code-related words (python, javascript, function, class, bug, compile)
+- Use "gmail" for email/inbox/calendar actions
+- Use "finance" for stocks, crypto, expenses, budget
+- Use "browser" for visiting URLs, scraping, prices from websites
+- Use "github" for repos, issues, PRs, CI
 - Return ONLY the JSON object. Absolutely no other text.
 
 Legacy schema (still supported): direct answer with {"tool":"direct","action":"none","params":{},"direct_response":true,"final_response":"..."}
@@ -248,6 +284,10 @@ class ToolRegistry:
         prompt_optimizer: Any | None = None,
         autonomous_agent: Any | None = None,
         autonomy_reporter: Any | None = None,
+        finance_agent: Any | None = None,
+        personal_kb: Any | None = None,
+        plugin_registry: Any | None = None,
+        notifier: Any | None = None,
     ) -> None:
         self.brain = brain
         self.file_skill = file_skill
@@ -264,6 +304,10 @@ class ToolRegistry:
         self.prompt_optimizer = prompt_optimizer
         self.autonomous_agent = autonomous_agent
         self.autonomy_reporter = autonomy_reporter
+        self.finance_agent = finance_agent
+        self.personal_kb = personal_kb
+        self.plugin_registry = plugin_registry
+        self.notifier = notifier
         self._call_counts: dict[str, int] = {}
         self._skills_config_override: dict[str, Any] | None = (
             dict(skills_config) if isinstance(skills_config, dict) else None
@@ -401,6 +445,32 @@ class ToolRegistry:
             return _invoke(
                 self.smarthome_skill, action, params, tool=tool, action=action, user_message=user_message
             )
+        # Phase 2 tools — routed through orchestrator agents
+        if tool in ("gmail", "browser", "github", "finance", "kb"):
+            orch = getattr(self, "orchestrator", None)
+            if orch is not None:
+                agents_map = getattr(orch, "_agents", {}) or {}
+                if tool == "kb":
+                    # KB actions directly on personal_kb stored in orchestrator config
+                    agent = agents_map.get("memory")
+                    if agent is not None:
+                        kb = getattr(agent, "_personal_kb", None) or getattr(agent, "personal_kb", None)
+                        if kb is None:
+                            return {"success": False, "result": "Personal KB not available.", "error": "KB not wired"}
+                        if action == "add_contact":
+                            return kb.add_contact(**{k: v for k, v in params.items() if k in ("name","email","phone","relationship","notes")})
+                        if action == "find_contact":
+                            return kb.find_contact(params.get("name", ""))
+                        if action == "update_goal":
+                            return kb.update_goal(params.get("goal", ""), int(params.get("progress", 0)))
+                        if action == "get_profile":
+                            return {"success": True, "result": str(kb.get_full_profile())}
+                        return {"success": False, "error": f"Unknown kb action: {action}"}
+                agent = agents_map.get(tool)
+                if agent is not None:
+                    task = {"action": action, "params": params, "description": f"{tool}.{action}"}
+                    return agent.execute(task)
+            return {"success": False, "result": f"{tool} agent not available.", "error": f"{tool} not initialized"}
         return {"success": False, "result": "", "error": f"Unknown tool: {tool}"}
 
     def _agents_enabled(self) -> bool:
@@ -428,6 +498,38 @@ class ToolRegistry:
                 "response": str(e),
             }
 
+    def _direct_chat_with_response(
+        self,
+        user_message: str,
+        history: list[dict[str, str]],
+        override_response: str,
+    ) -> dict[str, Any]:
+        _ = user_message
+        _ = history
+        return {
+            "tool_used": "direct",
+            "action": "direct",
+            "raw_result": {},
+            "final_response": override_response,
+            "response": override_response,
+        }
+
+    def _guess_category(self, description: str) -> str:
+        desc = description.lower()
+        if any(w in desc for w in ["lunch", "dinner", "breakfast", "food", "restaurant", "chai", "coffee", "eat", "meal", "snack", "biryani", "pizza"]):
+            return "food"
+        if any(w in desc for w in ["uber", "ola", "auto", "cab", "bus", "train", "metro", "petrol", "fuel", "taxi"]):
+            return "transport"
+        if any(w in desc for w in ["movie", "netflix", "game", "concert", "party", "drink", "bar"]):
+            return "entertainment"
+        if any(w in desc for w in ["amazon", "flipkart", "clothes", "shirt", "shoes", "shopping", "order"]):
+            return "shopping"
+        if any(w in desc for w in ["doctor", "medicine", "pharmacy", "hospital", "gym", "health"]):
+            return "health"
+        if any(w in desc for w in ["course", "book", "udemy", "college", "school", "class"]):
+            return "education"
+        return "other"
+
     def route(self, user_message: str, conversation_history: list[dict[str, str]]) -> dict[str, Any]:
         """
         When an orchestrator is configured and enabled, run multi-agent routing first.
@@ -444,6 +546,72 @@ class ToolRegistry:
             "H1",
         )
         # #endregion
+
+        # Expense logging — intercept before orchestrator loses it
+        expense_pattern = re.compile(
+            r"(spent|paid|spend|cost me|costs?)\s+(?:rs\.?|rupees?|inr|₹)?\s*(\d+(?:\.\d+)?)\s*(?:rs\.?|rupees?|inr|₹)?\s*(?:on|for)?\s*(.*)",
+            re.IGNORECASE,
+        )
+        match = expense_pattern.search(msg_lower)
+        if match:
+            amount = float(match.group(2))
+            description = match.group(3).strip() or "misc"
+            category = self._guess_category(description)
+            if self.finance_agent:
+                result = self.finance_agent.execute(
+                    {
+                        "action": "add_expense",
+                        "params": {"amount": amount, "category": category, "description": description},
+                    }
+                )
+                return {
+                    "tool_used": "finance",
+                    "action": "add_expense",
+                    "raw_result": result,
+                    "final_response": (
+                        f"Logged ₹{amount:.0f} for {description} under {category}, Sir. "
+                        "Running total for this month will be updated."
+                    ),
+                    "response": f"Logged ₹{amount:.0f} for {description} under {category}, Sir.",
+                }
+
+        # Explicit "remember" commands — save directly to PersonalKB
+        remember_patterns = [
+            r"remember that (.+)",
+            r"my goal is (.+)",
+            r"i want to (.+) by (december|january|february|march|next year|\d{4})",
+            r"save (?:that|this)[:\s]+(.+)",
+            r"note that (.+)",
+            r"add (?:to )?my goals?[:\s]+(.+)",
+        ]
+        for pattern in remember_patterns:
+            m = re.search(pattern, msg_lower)
+            if m and self.personal_kb:
+                fact = m.group(1).strip()
+                if any(w in fact for w in ["goal", "launch", "build", "finish", "complete", "achieve", "want to", "plan to"]):
+                    self.personal_kb.add(
+                        "goals",
+                        {
+                            "goal": fact,
+                            "deadline": m.group(2) if (m.lastindex and m.lastindex >= 2) else "unspecified",
+                            "progress_pct": 0,
+                            "status": "active",
+                        },
+                    )
+                    return self._direct_chat_with_response(
+                        user_message,
+                        conversation_history,
+                        f"Understood, Sir. I've saved your goal: '{fact}'. I'll keep track of this for you.",
+                    )
+                self.personal_kb.add(
+                    "preferences",
+                    {"preference": fact, "strength": 5, "category": "general"},
+                )
+                return self._direct_chat_with_response(
+                    user_message,
+                    conversation_history,
+                    f"Noted, Sir. I've remembered: '{fact}'.",
+                )
 
         # Slash command handling for autonomy/self-improvement.
         if msg_lower.startswith("/schedule ") and self.autonomous_agent is not None:
@@ -578,6 +746,34 @@ class ToolRegistry:
                 }
             except Exception:
                 pass
+
+        # Plugin registry routing (before orchestrator)
+        if self.plugin_registry:
+            try:
+                command = user_message.strip().split(" ", 1)[0] if user_message.strip().startswith("/") else user_message
+                args = user_message.strip().split(" ", 1)[1] if user_message.strip().startswith("/") and " " in user_message.strip() else ""
+                plugin_result = self.plugin_registry.route(
+                    command,
+                    args,
+                    {
+                        "user_message": user_message,
+                        "conversation_history": conversation_history,
+                        "mood": str((emotion_info or {}).get("mood") or "neutral"),
+                        "session_id": "default",
+                    },
+                )
+                if plugin_result:
+                    k = f"plugin.{plugin_result['plugin']}"
+                    self._call_counts[k] = self._call_counts.get(k, 0) + 1
+                    return {
+                        "tool_used": k,
+                        "action": "execute",
+                        "raw_result": plugin_result,
+                        "final_response": plugin_result["response"],
+                        "response": plugin_result["response"],
+                    }
+            except Exception as e:
+                logger.warning("Plugin routing failed: %s", e)
 
         if self.orchestrator is not None and self._agents_enabled():
             try:

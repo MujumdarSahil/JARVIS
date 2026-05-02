@@ -152,6 +152,8 @@ class TaskScheduler:
                     result = {"deleted": deleted}
                 else:
                     result = {"deleted": 0, "reason": "db unavailable"}
+            elif action in ("weekly_learning", "weekly_study") and getattr(self.registry, "weekly_learner", None):
+                result = self.registry.weekly_learner.run_weekly_study()
             else:
                 result = {"skipped": f"unknown action {action}"}
         except Exception as exc:

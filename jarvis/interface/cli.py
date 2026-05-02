@@ -55,11 +55,16 @@ class CLI:
         voice_config: dict[str, Any] | None = None,
         wake_detector: WakeWordDetector | None = None,
         registry: ToolRegistry | None = None,
+        plugin_registry: Any | None = None,
+        suggestion_engine: Any | None = None,
     ) -> None:
         self._brain = brain
         self._memory = memory
         self._context = context
         self._registry = registry
+        self._plugin_registry = plugin_registry
+        self._suggestion_engine = suggestion_engine
+        self._last_suggestion: dict[str, Any] | None = None
         self._console = console or Console(highlight=False)
         self._listener = listener
         self._speaker = speaker
@@ -214,6 +219,9 @@ class CLI:
         if user_line.startswith("/"):
             return self._handle_slash(user_line)
 
+        if user_line.lower() in ("yes", "yeah", "yep", "sure") and self._last_suggestion:
+            return self._accept_last_suggestion()
+
         self._memory.add("user", user_line)
         messages = self._build_llm_messages()
 
@@ -239,7 +247,52 @@ class CLI:
         self._memory.add("assistant", reply)
         self._type_response(reply)
         self._maybe_speak(reply, ignore_voice_mode=ignore_voice_mode_for_tts)
+        self._maybe_surface_suggestion()
         return True
+
+    def _accept_last_suggestion(self) -> bool:
+        if not self._last_suggestion:
+            return True
+        action = str(self._last_suggestion.get("action") or "")
+        if not action:
+            return True
+        if self._suggestion_engine is not None:
+            self._suggestion_engine.mark_accepted(str(self._last_suggestion.get("suggestion_id", "")))
+        route_map = {
+            "finance.market_summary": "/stocks",
+            "finance.budget_status": "/budget",
+            "gmail.read_inbox": "/inbox",
+            "autonomy.list_tasks": "/tasks",
+        }
+        mapped = route_map.get(action, "")
+        self._last_suggestion = None
+        if mapped:
+            return self._handle_slash(mapped)
+        self._type_response("Acknowledged. Executing that now.")
+        return True
+
+    def _maybe_surface_suggestion(self) -> None:
+        if self._suggestion_engine is None:
+            return
+        context = {"pending_tasks": 0, "unread_emails": 0}
+        try:
+            orch = getattr(self._registry, "orchestrator", None)
+            agents_map = getattr(orch, "_agents", {}) if orch else {}
+            gmail = agents_map.get("gmail")
+            if gmail is not None:
+                inbox = gmail.execute({"action": "read_inbox", "params": {"max_results": 20}})
+                context["unread_emails"] = len(inbox.get("emails", []) or [])
+        except Exception:
+            pass
+        suggestions = self._suggestion_engine.get_suggestions(context)
+        if not suggestions:
+            return
+        candidate = suggestions[0]
+        if not self._suggestion_engine.should_surface_suggestion(candidate):
+            return
+        self._suggestion_engine.mark_shown(candidate)
+        self._last_suggestion = candidate
+        self._console.print(Text(f"💡 {candidate.get('suggestion', '')}", style="dim cyan"))
 
     def handle_wake_event(self) -> None:
         """
@@ -330,6 +383,17 @@ class CLI:
             return True
 
         if cmd == "/help":
+            plugin_help = ""
+            if self._plugin_registry is not None:
+                plugin_cmds = ", ".join(self._plugin_registry.get_all_commands()) or "none"
+                plugin_help = (
+                    "\n/plugins — list loaded plugins\n"
+                    "/plugin reload <name> — hot-reload a plugin\n"
+                    "/plugin enable <name> — enable plugin\n"
+                    "/plugin disable <name> — disable plugin\n"
+                    "/plugin help <name> — plugin help text\n"
+                    f"Plugin slash commands: {plugin_cmds}\n"
+                )
             help_text = (
                 "/help — show this help\n"
                 "/clear — clear conversation memory\n"
@@ -352,9 +416,71 @@ class CLI:
                 "/performance — show self-improvement stats\n"
                 "/brief — generate morning brief\n"
                 "/daily — show autonomous activity summary\n"
+                "/inbox — show unread email summary\n"
+                "/calendar — show upcoming calendar events\n"
+                "/stocks — show market summary\n"
+                "/expense <amount> <category> <description> — log expense\n"
+                "/budget — show budget vs actual spending\n"
+                "/github <repo> — show repo summary (optional: omit for repo list)\n"
+                "/profile — show personal KB profile\n"
+                "/contact <name> — look up a contact\n"
+                "/goals — show personal goals\n"
+                "/me — show JARVIS self-model\n"
+                "/patterns — show learned usage patterns\n"
+                "/suggestions — show proactive suggestions\n"
+                "/weekly — show latest weekly learning report\n"
+                "/trajectory — show improvement trajectory\n"
+                "/milestone — show relationship milestones\n"
                 "/exit — quit Jarvis"
             )
+            help_text += plugin_help
             self._console.print(Text(help_text, style="yellow"))
+            return True
+
+        if cmd == "/plugins":
+            if self._plugin_registry is None:
+                self._console.print(Text("Plugin system disabled.", style="yellow"))
+                return True
+            rows = self._plugin_registry.list_plugins()
+            if not rows:
+                self._console.print(Text("No plugins loaded.", style="yellow"))
+                return True
+            table = Table(title="Plugins")
+            table.add_column("NAME", style="cyan")
+            table.add_column("VERSION", style="magenta")
+            table.add_column("STATUS", style="green")
+            table.add_column("COMMANDS", style="yellow")
+            for r in rows:
+                table.add_row(str(r["name"]), str(r["version"]), "enabled" if r["enabled"] else "disabled", ", ".join(r["commands"]))
+            self._console.print(table)
+            return True
+
+        if cmd == "/plugin":
+            if self._plugin_registry is None:
+                self._console.print(Text("Plugin system disabled.", style="yellow"))
+                return True
+            if len(parts) < 3:
+                self._console.print(Text("Usage: /plugin <reload|enable|disable|help> <name>", style="yellow"))
+                return True
+            action = parts[1].lower()
+            name = parts[2]
+            if action == "reload":
+                ok = self._plugin_registry.reload_plugin(name)
+                self._console.print(Text("Reloaded." if ok else "Reload failed.", style="yellow"))
+                return True
+            if action == "enable":
+                ok = self._plugin_registry.enable_plugin(name)
+                self._console.print(Text("Enabled." if ok else "Enable failed.", style="yellow"))
+                return True
+            if action == "disable":
+                ok = self._plugin_registry.disable_plugin(name)
+                self._console.print(Text("Disabled." if ok else "Disable failed.", style="yellow"))
+                return True
+            if action == "help":
+                p = self._plugin_registry.get_plugin(name)
+                self._console.print(Text(p.get_help() if p else "Plugin not found.", style="yellow"))
+                return True
+            self._console.print(Text("Unknown /plugin action.", style="red"))
             return True
 
         if cmd == "/tools":
@@ -604,8 +730,217 @@ class CLI:
                 self._console.print(Text(f"... and {len(voices) - 80} more", style="yellow"))
             return True
 
-        self._console.print(Text(f"Unknown command {cmd}. Type /help for a list.", style="red"))
+        # Phase 2 slash commands
+        if self._registry is not None:
+            p2 = self._handle_phase2_slash(cmd, parts)
+            if p2 is not None:
+                return p2
+
+        if self._plugin_registry is not None and cmd.startswith("/"):
+            args = line.split(" ", 1)[1] if " " in line else ""
+            plugin_result = self._plugin_registry.route(cmd, args, {"user_message": line, "conversation_history": self._memory.get_history(), "mood": "neutral", "session_id": "cli"})
+            if plugin_result:
+                self._type_response(str(plugin_result.get("response") or ""))
+                return True
+        self._console.print(Text("Unknown command. Type /help to see all commands.", style="red"))
         return True
+
+    def _handle_phase2_slash(self, cmd: str, parts: list) -> bool | None:
+        """Handle Phase 2 slash commands. Returns True/False or None if not handled."""
+        orch = getattr(self._registry, "orchestrator", None)
+        agents_map = getattr(orch, "_agents", {}) if orch else {}
+
+        if cmd == "/inbox":
+            agent = agents_map.get("gmail")
+            if agent is None:
+                self._console.print(Text("[GMAIL] Not enabled. Set gmail.enabled: true in config.yaml", style="yellow"))
+                return True
+            result = agent.execute({"action": "read_inbox", "params": {}})
+            self._type_response(str(result.get("result", "No data")))
+            return True
+
+        if cmd == "/calendar":
+            agent = agents_map.get("gmail")
+            if agent is None:
+                self._console.print(Text("[GMAIL] Not enabled.", style="yellow"))
+                return True
+            result = agent.execute({"action": "get_calendar", "params": {"days_ahead": 7}})
+            self._type_response(str(result.get("result", "No events")))
+            return True
+
+        if cmd == "/stocks":
+            agent = agents_map.get("finance")
+            if agent is None:
+                self._console.print(Text("[FINANCE] Not enabled. Set finance.enabled: true in config.yaml", style="yellow"))
+                return True
+            result = agent.execute({"action": "market_summary", "params": {}})
+            self._type_response(str(result.get("result", "No market data")))
+            return True
+
+        if cmd == "/expense":
+            if len(parts) < 4:
+                self._console.print(Text("Usage: /expense <amount> <category> <description>", style="red"))
+                return True
+            agent = agents_map.get("finance")
+            if agent is None:
+                self._console.print(Text("[FINANCE] Not enabled.", style="yellow"))
+                return True
+            try:
+                amount = float(parts[1])
+                category = parts[2]
+                description = " ".join(parts[3:])
+                result = agent.execute({"action": "add_expense", "params": {"amount": amount, "category": category, "description": description}})
+                self._type_response(str(result.get("result", "Logged")))
+            except ValueError:
+                self._console.print(Text(f"Invalid amount: {parts[1]}", style="red"))
+            return True
+
+        if cmd == "/budget":
+            agent = agents_map.get("finance")
+            if agent is None:
+                self._console.print(Text("[FINANCE] Not enabled.", style="yellow"))
+                return True
+            result = agent.execute({"action": "budget_status", "params": {}})
+            self._type_response(str(result.get("result", "No budget data")))
+            return True
+
+        if cmd == "/github":
+            agent = agents_map.get("github")
+            if agent is None:
+                self._console.print(Text("[GITHUB] Not enabled. Set github.enabled: true and github.token in config.yaml", style="yellow"))
+                return True
+            if len(parts) > 1:
+                repo = parts[1]
+                result = agent.execute({"action": "repo_summary", "params": {"repo": repo}})
+            else:
+                result = agent.execute({"action": "list_repos", "params": {}})
+            self._type_response(str(result.get("result", "No data")))
+            return True
+
+        if cmd == "/profile":
+            # Try to find personal_kb on memory agent
+            memory_agent = agents_map.get("memory")
+            kb = None
+            if memory_agent:
+                kb = getattr(memory_agent, "_personal_kb", None) or getattr(memory_agent, "personal_kb", None)
+            # Also try context
+            if kb is None and self._context:
+                kb = getattr(self._context, "_personal_kb", None)
+            if kb is None:
+                self._console.print(Text("[KB] Personal KB not available.", style="yellow"))
+                return True
+            profile = kb.get_full_profile()
+            lines = []
+            for cat, items in profile.items():
+                if items:
+                    lines.append(f"{cat.upper()}: {len(items)} item(s)")
+            self._type_response("\n".join(lines) if lines else "No personal data stored yet.")
+            return True
+
+        if cmd == "/contact":
+            if len(parts) < 2:
+                self._console.print(Text("Usage: /contact <name>", style="red"))
+                return True
+            name = " ".join(parts[1:])
+            ctx_kb = getattr(self._context, "_personal_kb", None)
+            if ctx_kb is None:
+                self._console.print(Text("[KB] Personal KB not available.", style="yellow"))
+                return True
+            result = ctx_kb.find_contact(name)
+            if result.get("success"):
+                c = result.get("contact", {})
+                info = f"{c.get('name')} | {c.get('email','')} | {c.get('phone','')} | {c.get('relationship','')}"
+                self._type_response(info)
+            else:
+                self._type_response(result.get("error", "Not found"))
+            return True
+
+        if cmd == "/goals":
+            ctx_kb = getattr(self._context, "_personal_kb", None)
+            if ctx_kb is None:
+                self._console.print(Text("[KB] Personal KB not available.", style="yellow"))
+                return True
+            goals = ctx_kb.get("goals")
+            if not goals:
+                self._type_response("No goals stored yet. Tell me about your goals!")
+            else:
+                self._console.print(Text("Your Goals:", style="bold cyan"))
+                table = Table()
+                table.add_column("GOAL", style="cyan")
+                table.add_column("DEADLINE", style="magenta")
+                table.add_column("PROGRESS", style="yellow")
+                table.add_column("STATUS", style="green")
+                for g in goals:
+                    table.add_row(
+                        str(g.get("goal", "?")),
+                        str(g.get("deadline", "unspecified")),
+                        f"{int(g.get('progress_pct', 0))}%",
+                        str(g.get("status", "active")),
+                    )
+                self._console.print(table)
+            return True
+
+        if cmd == "/me":
+            js = getattr(self._context, "_jarvis_self", None)
+            rel = getattr(self._context, "_relationship", None)
+            if js is None or rel is None:
+                self._type_response("Identity model is not available.")
+                return True
+            self._type_response(js.get_self_description() + "\n" + rel.get_relationship_summary())
+            return True
+
+        if cmd == "/patterns":
+            pe = getattr(self._registry, "pattern_engine", None)
+            if pe is None:
+                self._type_response("Pattern engine is not available.")
+                return True
+            pats = pe.find_patterns()
+            if not pats:
+                self._type_response("No stable patterns yet.")
+                return True
+            self._type_response("\n".join(f"- {p.get('description')}" for p in pats[:8]))
+            return True
+
+        if cmd == "/suggestions":
+            se = getattr(self._registry, "suggestion_engine", None)
+            if se is None:
+                self._type_response("Suggestion engine is not available.")
+                return True
+            sugs = se.get_suggestions({})
+            self._type_response("\n".join(f"- {s.get('suggestion')}" for s in sugs[:5]) or "No pending suggestions.")
+            return True
+
+        if cmd == "/weekly":
+            wl = getattr(self._registry, "weekly_learner", None)
+            if wl is None:
+                self._type_response("Weekly learner is not available.")
+                return True
+            rep = wl.get_weekly_report(0)
+            self._type_response(str(rep or "No weekly report yet."))
+            return True
+
+        if cmd == "/trajectory":
+            wl = getattr(self._registry, "weekly_learner", None)
+            if wl is None:
+                self._type_response("Weekly learner is not available.")
+                return True
+            traj = wl.get_improvement_trajectory()
+            self._type_response(str(traj))
+            return True
+
+        if cmd == "/milestone":
+            rel = getattr(self._context, "_relationship", None)
+            if rel is None:
+                self._type_response("Relationship tracker is not available.")
+                return True
+            new_hits = rel.check_milestones()
+            if not new_hits:
+                self._type_response("No new milestones yet.")
+                return True
+            self._type_response("\n".join(rel.get_milestone_message(m) for m in new_hits))
+            return True
+
+        return None  # not handled
 
     def _cmd_voice(self, parts: list[str]) -> bool:
         sub = parts[1].lower() if len(parts) > 1 else "status"
